@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../src/app.js";
 import { postJson, startServer } from "./helpers.js";
 
 test("creates a link and redirects to it", async () => {
-  const app = createApp();
+  const app = createApp({ databasePath: ":memory:" });
   const server = await startServer(app);
   try {
     const created = await postJson(server.baseUrl, "/links", { url: "https://example.com/docs" });
@@ -22,7 +23,7 @@ test("creates a link and redirects to it", async () => {
 });
 
 test("returns link metadata and 404 for unknown codes", async () => {
-  const app = createApp();
+  const app = createApp({ databasePath: ":memory:" });
   const server = await startServer(app);
   try {
     await postJson(server.baseUrl, "/links", { url: "https://example.com", code: "home" });
@@ -37,7 +38,7 @@ test("returns link metadata and 404 for unknown codes", async () => {
 });
 
 test("rejects invalid URLs and custom codes", async () => {
-  const app = createApp();
+  const app = createApp({ databasePath: ":memory:" });
   const server = await startServer(app);
   try {
     for (const url of ["/relative", "ftp://example.com", "javascript:alert(1)"]) {
@@ -61,7 +62,7 @@ test("rejects invalid URLs and custom codes", async () => {
 });
 
 test("returns 409 when a custom code already exists", async () => {
-  const app = createApp();
+  const app = createApp({ databasePath: ":memory:" });
   const server = await startServer(app);
   try {
     const first = await postJson(server.baseUrl, "/links", {
@@ -195,6 +196,52 @@ test("click analytics persist across app instances", async () => {
   } finally {
     await secondServer.close();
     secondApp.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("stores versioned migrations and click referers in SQLite", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp("/tmp/link-shortener-schema-");
+  const databasePath = join(directory, "links.sqlite");
+  const app = createApp({ databasePath, now: () => Date.parse("2026-03-04T05:06:07.000Z") });
+  const server = await startServer(app);
+
+  try {
+    await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/persistence",
+      code: "persist",
+    });
+    const redirect = await fetch(`${server.baseUrl}/persist`, {
+      redirect: "manual",
+      headers: { referer: "https://source.example/article" },
+    });
+    assert.equal(redirect.status, 302);
+  } finally {
+    await server.close();
+    app.locals.close();
+  }
+
+  const database = new DatabaseSync(databasePath);
+  try {
+    assert.deepEqual(
+      database
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all()
+        .map(({ version }) => version),
+      [1, 2],
+    );
+    assert.deepEqual(
+      { ...database.prepare("SELECT code, clicked_at, referer FROM clicks").get() },
+      {
+        code: "persist",
+        clicked_at: "2026-03-04T05:06:07.000Z",
+        referer: "https://source.example/article",
+      },
+    );
+  } finally {
+    database.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
