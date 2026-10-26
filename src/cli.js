@@ -10,19 +10,29 @@ const EXIT_VALIDATION = 2;
 
 function parseArguments(argv) {
   const options = { input: undefined, groupBy: undefined, sum: undefined, schema: undefined, skipInvalid: false, count: false, format: "table", out: undefined };
+  let invalidArgument;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === "--group-by") options.groupBy = argv[++index];
-    else if (argument === "--sum") options.sum = argv[++index];
-    else if (argument === "--schema") options.schema = argv[++index];
-    else if (argument === "--format") options.format = argv[++index];
-    else if (argument === "--out") options.out = argv[++index];
+    if (["--group-by", "--sum", "--schema", "--format", "--out"].includes(argument)) {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        invalidArgument = argument;
+        continue;
+      }
+      index += 1;
+      if (argument === "--group-by") options.groupBy = value;
+      else if (argument === "--sum") options.sum = value;
+      else if (argument === "--schema") options.schema = value;
+      else if (argument === "--format") options.format = value;
+      else options.out = value;
+    }
     else if (argument === "--skip-invalid") options.skipInvalid = true;
     else if (argument === "--count") options.count = true;
-    else if (argument.startsWith("--")) options.invalidArgument = argument;
+    else if (argument.startsWith("-")) invalidArgument = argument;
     else if (!options.input) options.input = argument;
-    else options.invalidArgument = argument;
+    else invalidArgument = argument;
   }
+  options.invalidArgument = invalidArgument;
   return options;
 }
 

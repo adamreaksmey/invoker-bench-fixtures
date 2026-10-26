@@ -97,6 +97,32 @@ test("prints usage without an input file", () => {
   assert.match(result.stderr, /^usage:/);
 });
 
+test("rejects unknown flags with a usage message", () => {
+  const result = runCli([writeCsv("name\napple\n"), "--wat"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^usage:/);
+});
+
+test("rejects a missing input file with a usage message", () => {
+  const result = runCli(["--count"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^usage:/);
+});
+
+test("reports unreadable input files as I/O errors", () => {
+  const result = runCli([join(tmpdir(), "csvreport-file-that-does-not-exist.csv")]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^error:/);
+});
+
+test("rejects options without their required value", () => {
+  for (const flag of ["--group-by", "--sum", "--schema", "--format", "--out"]) {
+    const result = runCli([writeCsv("name\napple\n"), flag]);
+    assert.equal(result.exitCode, 1, flag);
+    assert.match(result.stderr, /^usage:/, flag);
+  }
+});
+
 test("validates schema rules, reports 1-based rows, and converts numeric fields", () => {
   const schema = writeSchema({ columns: {
     region: { type: "string", required: true, enum: ["north", "south"] },
