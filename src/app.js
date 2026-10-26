@@ -41,6 +41,19 @@ function migrate(database) {
         `);
       },
     },
+    {
+      version: 2,
+      apply() {
+        database.exec(`
+          CREATE TABLE IF NOT EXISTS clicks (
+            id INTEGER PRIMARY KEY,
+            code TEXT NOT NULL,
+            clicked_at TEXT NOT NULL,
+            referer TEXT
+          )
+        `);
+      },
+    },
   ];
 
   const hasMigration = database.prepare("SELECT 1 FROM schema_migrations WHERE version = ?");
@@ -64,6 +77,7 @@ function migrate(database) {
 
 export function createApp(options = {}) {
   const databasePath = options.databasePath ?? process.env.DATABASE_PATH ?? "shortener.sqlite";
+  const now = options.now ?? (() => Date.now());
   const database = new DatabaseSync(databasePath);
   migrate(database);
 
@@ -72,6 +86,12 @@ export function createApp(options = {}) {
   );
   const findLink = database.prepare(
     "SELECT code, url, created_at AS createdAt FROM links WHERE code = ?",
+  );
+  const insertClick = database.prepare(
+    "INSERT INTO clicks (code, clicked_at, referer) VALUES (?, ?, ?)",
+  );
+  const findClicks = database.prepare(
+    "SELECT clicked_at AS clickedAt FROM clicks WHERE code = ? ORDER BY clicked_at DESC, id DESC",
   );
   const app = express();
   app.disable("x-powered-by");
@@ -102,9 +122,30 @@ export function createApp(options = {}) {
     return res.json(link);
   });
 
+  app.get("/links/:code/stats", (req, res) => {
+    const link = findLink.get(req.params.code);
+    if (!link) return res.status(404).json({ error: "link not found" });
+
+    const clicks = findClicks.all(req.params.code);
+    const clicksByDay = {};
+    for (const click of clicks) {
+      const day = click.clickedAt.slice(0, 10);
+      clicksByDay[day] = (clicksByDay[day] ?? 0) + 1;
+    }
+
+    return res.json({
+      code: link.code,
+      url: link.url,
+      totalClicks: clicks.length,
+      lastClickedAt: clicks[0]?.clickedAt ?? null,
+      clicksByDay,
+    });
+  });
+
   app.get("/:code", (req, res) => {
     const link = findLink.get(req.params.code);
     if (!link) return res.status(404).json({ error: "link not found" });
+    insertClick.run(req.params.code, new Date(now()).toISOString(), req.get("referer") ?? null);
     return res.redirect(302, link.url);
   });
 

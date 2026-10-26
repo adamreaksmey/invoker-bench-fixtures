@@ -112,3 +112,89 @@ test("persists links across app instances", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("records redirect clicks with referers and reports UTC daily stats", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp("/tmp/link-shortener-clicks-");
+  const databasePath = join(directory, "links.sqlite");
+  let currentTime = Date.parse("2026-01-01T23:59:59.000Z");
+  const app = createApp({ databasePath, now: () => currentTime });
+  const server = await startServer(app);
+
+  try {
+    await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/analytics",
+      code: "stats",
+    });
+
+    const firstRedirect = await fetch(`${server.baseUrl}/stats`, {
+      redirect: "manual",
+      headers: { referer: "https://referrer.example/" },
+    });
+    assert.equal(firstRedirect.status, 302);
+
+    currentTime = Date.parse("2026-01-02T03:04:05.000Z");
+    const secondRedirect = await fetch(`${server.baseUrl}/stats`, { redirect: "manual" });
+    assert.equal(secondRedirect.status, 302);
+
+    const statsResponse = await fetch(`${server.baseUrl}/links/stats/stats`);
+    assert.equal(statsResponse.status, 200);
+    assert.deepEqual(await statsResponse.json(), {
+      code: "stats",
+      url: "https://example.com/analytics",
+      totalClicks: 2,
+      lastClickedAt: "2026-01-02T03:04:05.000Z",
+      clicksByDay: { "2026-01-01": 1, "2026-01-02": 1 },
+    });
+
+    const afterStats = await fetch(`${server.baseUrl}/links/stats/stats`);
+    assert.equal((await afterStats.json()).totalClicks, 2);
+    assert.equal((await fetch(`${server.baseUrl}/missing/stats`)).status, 404);
+  } finally {
+    await server.close();
+    app.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("click analytics persist across app instances", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp("/tmp/link-shortener-clicks-restart-");
+  const databasePath = join(directory, "links.sqlite");
+  const firstApp = createApp({
+    databasePath,
+    now: () => Date.parse("2026-02-03T10:11:12.000Z"),
+  });
+  const firstServer = await startServer(firstApp);
+
+  try {
+    await postJson(firstServer.baseUrl, "/links", {
+      url: "https://example.com/restart",
+      code: "restart",
+    });
+    const redirect = await fetch(`${firstServer.baseUrl}/restart`, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+  } finally {
+    await firstServer.close();
+    firstApp.locals.close();
+  }
+
+  const secondApp = createApp({ databasePath });
+  const secondServer = await startServer(secondApp);
+  try {
+    const stats = await fetch(`${secondServer.baseUrl}/links/restart/stats`);
+    assert.deepEqual(await stats.json(), {
+      code: "restart",
+      url: "https://example.com/restart",
+      totalClicks: 1,
+      lastClickedAt: "2026-02-03T10:11:12.000Z",
+      clicksByDay: { "2026-02-03": 1 },
+    });
+  } finally {
+    await secondServer.close();
+    secondApp.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
