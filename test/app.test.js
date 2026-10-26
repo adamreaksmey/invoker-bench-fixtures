@@ -94,6 +94,23 @@ test("search finds pages containing the query", async () => {
   }
 });
 
+test("search ANDs every term and treats punctuation as plain text", async () => {
+  const pagesDir = makePagesDir();
+  writeFileSync(join(pagesDir, "both-terms.md"), "# Deploy guide\n\nDeploy this guide safely.\n");
+  writeFileSync(join(pagesDir, "one-term.md"), "# Deploy only\n\nDeploy this page.\n");
+  const app = createApp({ pagesDir, indexPath: makeIndexPath() });
+  const server = await startServer(app);
+  try {
+    const response = await (await fetch(`${server.baseUrl}/search?q=%22DEPLOY%22%20%2Fguide%2F%21`)).json();
+    assert.deepEqual(response.results.map(({ slug }) => slug), ["both-terms"]);
+    assert.match(response.results[0].snippet, /\*\*Deploy\*\*/i);
+    assert.equal((await fetch(`${server.baseUrl}/search?q=!!!%20%22%22`)).status, 200);
+  } finally {
+    await server.close();
+    app.locals.close();
+  }
+});
+
 test("synchronizes changed, added, and removed files when reopening the app", async () => {
   const pagesDir = makePagesDir();
   const indexPath = makeIndexPath();

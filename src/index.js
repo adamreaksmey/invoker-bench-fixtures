@@ -42,11 +42,16 @@ function migrate(db) {
 }
 
 function searchTerms(query) {
-  return query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  // Build the MATCH expression from tokens, rather than passing user input
+  // through to FTS5. This makes punctuation (including FTS operators and
+  // quotes) ordinary separators and keeps malformed input from becoming an
+  // FTS syntax error.
+  return [...new Set(query.match(/[\p{L}\p{N}_]+/gu) ?? [])];
 }
 
 function makeSnippet(body, terms) {
-  const expression = new RegExp(`(${terms.map((term) => term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")).join("|")})`, "giu");
+  const escapedTerms = terms.map((term) => term.replace(/[.*+?^${}()|[\[\]\\]/g, "\\$&"));
+  const expression = new RegExp(`(${escapedTerms.join("|")})`, "giu");
   const match = expression.exec(body);
   const start = match ? Math.max(0, match.index - 70) : 0;
   const end = Math.min(body.length, start + 180);
@@ -120,7 +125,7 @@ export function openIndex(indexPath, pagesDir) {
       return db.prepare(`
         SELECT p.slug, p.title, p.body, bm25(pages_fts, 10.0, 1.0) AS rank
         FROM pages_fts JOIN pages p ON p.slug = pages_fts.slug
-        WHERE pages_fts MATCH ? ORDER BY rank LIMIT 20
+        WHERE pages_fts MATCH ? ORDER BY rank ASC, p.slug ASC LIMIT 20
       `).all(match).map((page) => ({
         slug: page.slug,
         title: page.title,
