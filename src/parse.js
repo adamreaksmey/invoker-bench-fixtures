@@ -5,13 +5,18 @@ const CR = "\r";
 const LF = "\n";
 
 export function parseCsv(text) {
+  return parseCsvDocument(text).rows;
+}
+
+export function parseCsvDocument(text) {
   const content = stripUtf8Bom(text);
   const records = parseRecords(content);
   if (records.length === 0) {
-    return [];
+    return { header: [], rows: [] };
   }
   const [header, ...dataRecords] = records;
-  return dataRecords.map((cells) => rowFromCells(header, cells));
+  const rows = dataRecords.map((cells) => rowFromCells(header, cells));
+  return { header, rows };
 }
 
 function stripUtf8Bom(text) {
