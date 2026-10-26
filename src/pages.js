@@ -8,8 +8,30 @@ export function pagePath(pagesDir, slug) {
   return join(pagesDir, `${slug}${PAGE_EXTENSION}`);
 }
 
+function parseTags(value) {
+  const list = value.trim().replace(/^\[/, "").replace(/\]$/, "");
+  return [...new Set(list.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean))].sort();
+}
+
+export function parseFrontMatter(markdown) {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return { title: undefined, tags: [], body: markdown };
+
+  const fields = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^\s*([A-Za-z][\w-]*):\s*(.*)$/);
+    if (field) fields[field[1].toLowerCase()] = field[2].trim();
+  }
+
+  return {
+    title: fields.title || undefined,
+    tags: fields.tags ? parseTags(fields.tags) : [],
+    body: markdown.slice(match[0].length),
+  };
+}
+
 export function titleFor(slug, markdown) {
-  const heading = markdown.split("\n").find((line) => line.startsWith("# "));
+  const heading = markdown.split(/\r?\n/).find((line) => line.startsWith("# "));
   return heading ? heading.slice(2).trim() : slug;
 }
 
@@ -24,8 +46,13 @@ export function listSlugs(pagesDir) {
 export function readPage(pagesDir, slug) {
   const path = pagePath(pagesDir, slug);
   if (!existsSync(path)) return undefined;
-  const body = readFileSync(path, "utf8");
-  return { slug, title: titleFor(slug, body), body };
+  const parsed = parseFrontMatter(readFileSync(path, "utf8"));
+  return {
+    slug,
+    title: parsed.title || titleFor(slug, parsed.body),
+    tags: parsed.tags,
+    body: parsed.body,
+  };
 }
 
 export function writePage(pagesDir, slug, body) {

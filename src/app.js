@@ -15,8 +15,8 @@ export function createApp(options = {}) {
 
   app.get("/pages", (_req, res) => {
     res.json(listSlugs(pagesDir).map((slug) => {
-      const { title } = readPage(pagesDir, slug);
-      return { slug, title };
+      const { title, tags } = readPage(pagesDir, slug);
+      return { slug, title, tags };
     }));
   });
 

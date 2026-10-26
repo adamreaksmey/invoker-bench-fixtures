@@ -8,7 +8,7 @@ import { startServer } from "./helpers.js";
 
 function makePagesDir() {
   const dir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
-  writeFileSync(join(dir, "welcome.md"), "# Welcome\n\nStart here.\n");
+  writeFileSync(join(dir, "welcome.md"), "---\ntitle: Welcome to the wiki\ntags: [onboarding, docs]\n---\n# Welcome\n\nStart here.\n");
   return dir;
 }
 
@@ -23,13 +23,52 @@ function putPage(baseUrl, slug, body) {
 test("lists, reads, creates, updates, and deletes pages", async () => {
   const server = await startServer(createApp({ pagesDir: makePagesDir() }));
   try {
-    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [{ slug: "welcome", title: "Welcome" }]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [{
+      slug: "welcome",
+      title: "Welcome to the wiki",
+      tags: ["docs", "onboarding"],
+    }]);
     assert.equal((await putPage(server.baseUrl, "notes", "# Notes\n")).status, 201);
     assert.equal((await putPage(server.baseUrl, "notes", "# Notes v2\n")).status, 200);
-    assert.equal((await (await fetch(`${server.baseUrl}/pages/notes`)).json()).title, "Notes v2");
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages/notes`)).json(), {
+      slug: "notes",
+      title: "Notes v2",
+      tags: [],
+      body: "# Notes v2\n",
+    });
     assert.equal((await fetch(`${server.baseUrl}/pages/notes`, { method: "DELETE" })).status, 204);
     assert.equal((await fetch(`${server.baseUrl}/pages/notes`)).status, 404);
     assert.equal((await fetch(`${server.baseUrl}/pages/Bad_Slug`)).status, 400);
+  } finally {
+    await server.close();
+  }
+});
+
+test("parses front matter and applies title precedence", async () => {
+  const pagesDir = makePagesDir();
+  writeFileSync(join(pagesDir, "heading.md"), "# Heading title\n\nBody\n");
+  writeFileSync(join(pagesDir, "slug-only.md"), "Body without a heading\n");
+  writeFileSync(join(pagesDir, "front-matter.md"), "---\n title: Front matter title\ntags: [Ops, deploy, ops,  Docs ]\n---\n# Markdown title\n\nContent\n");
+  const server = await startServer(createApp({ pagesDir }));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages/front-matter`)).json(), {
+      slug: "front-matter",
+      title: "Front matter title",
+      tags: ["deploy", "docs", "ops"],
+      body: "# Markdown title\n\nContent\n",
+    });
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages/heading`)).json(), {
+      slug: "heading",
+      title: "Heading title",
+      tags: [],
+      body: "# Heading title\n\nBody\n",
+    });
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages/slug-only`)).json(), {
+      slug: "slug-only",
+      title: "slug-only",
+      tags: [],
+      body: "Body without a heading\n",
+    });
   } finally {
     await server.close();
   }
