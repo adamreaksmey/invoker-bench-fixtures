@@ -28,3 +28,18 @@ export function formatTable(rows) {
   const formatLine = (cells) => cells.map((cell, index) => String(cell).padEnd(widths[index])).join("  ").trimEnd();
   return [formatLine(columns), ...rows.map((row) => formatLine(columns.map((column) => row[column])))].join("\n") + "\n";
 }
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+export function formatCsv(rows, columns = rows.length > 0 ? Object.keys(rows[0]) : []) {
+  const lines = [columns.map(csvCell).join(",")];
+  for (const row of rows) lines.push(columns.map((column) => csvCell(row[column])).join(","));
+  return lines.join("\n") + "\n";
+}
+
+export function formatJson(rows) {
+  return `${JSON.stringify(rows, null, 2)}\n`;
+}

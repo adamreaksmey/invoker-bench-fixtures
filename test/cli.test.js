@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.js";
@@ -15,6 +15,10 @@ function writeSchema(schema) {
   const path = join(mkdtempSync(join(tmpdir(), "csvreport-")), "schema.json");
   writeFileSync(path, JSON.stringify(schema));
   return path;
+}
+
+function outputPath() {
+  return join(mkdtempSync(join(tmpdir(), "csvreport-")), "output.txt");
 }
 
 function runCli(argv) {
@@ -141,4 +145,39 @@ test("enforces enum, numeric bounds, and boolean values", () => {
   assert.match(result.stderr, /row 1: low:/);
   assert.match(result.stderr, /row 1: high:/);
   assert.match(result.stderr, /row 1: paid: expected boolean/);
+});
+
+test("formats output as pretty JSON with numeric values", () => {
+  const result = runCli([
+    writeCsv("name,qty\napple,2\n"),
+    "--schema", writeSchema({ columns: { qty: { type: "integer" } } }),
+    "--format", "json",
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, '[\n  {\n    "name": "apple",\n    "qty": 2\n  }\n]\n');
+});
+
+test("formats output as CSV with required quoting and LF endings", () => {
+  const result = runCli([writeCsv("name,note\nDoe,hello\n"), "--format", "csv"]);
+  assert.equal(result.exitCode, 0);
+
+  const quoted = runCli([writeCsv('name,note\n"Doe, John","said ""hi"""\n'), "--format", "csv"]);
+  assert.equal(quoted.exitCode, 0);
+  assert.equal(quoted.stdout, 'name,note\n"Doe, John","said ""hi"""\n');
+  assert.doesNotMatch(quoted.stdout, /\r/);
+  assert.equal(result.stdout, "name,note\nDoe,hello\n");
+});
+
+test("writes formatted output to --out and leaves stdout empty", () => {
+  const path = outputPath();
+  const result = runCli([writeCsv("name\nAda\n"), "--format", "json", "--out", path]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(readFileSync(path, "utf8"), '[\n  {\n    "name": "Ada"\n  }\n]\n');
+});
+
+test("rejects an invalid output format", () => {
+  const result = runCli([writeCsv("name\nAda\n"), "--format", "xml"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^usage:/);
 });
