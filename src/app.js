@@ -1,6 +1,12 @@
 import express from "express";
 import { randomBytes } from "node:crypto";
-import { findLinkByCode, insertLink, openDatabase } from "./db.js";
+import {
+  findLinkByCode,
+  getLinkStats,
+  insertClick,
+  insertLink,
+  openDatabase,
+} from "./db.js";
 
 const CODE_LENGTH = 6;
 const CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -9,6 +15,7 @@ const HTTP_PROTOCOL = "http:";
 const HTTPS_PROTOCOL = "https:";
 const DEFAULT_DATABASE_PATH = "shortener.sqlite";
 const JSON_BODY_LIMIT = "16kb";
+const DEFAULT_NOW = () => Date.now();
 
 function generateCode() {
   const bytes = randomBytes(CODE_LENGTH);
@@ -53,8 +60,19 @@ function validateCreateLinkBody(body) {
   };
 }
 
+function resolveNow(options) {
+  if (typeof options.now === "function") return options.now;
+  return DEFAULT_NOW;
+}
+
+function refererOrNull(headerValue) {
+  if (typeof headerValue !== "string" || headerValue.length === 0) return null;
+  return headerValue;
+}
+
 export function createApp(options = {}) {
   const database = openDatabase(resolveDatabasePath(options));
+  const now = resolveNow(options);
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
@@ -75,6 +93,12 @@ export function createApp(options = {}) {
     return res.status(201).json({ code, url, shortUrl: `/${code}` });
   });
 
+  app.get("/links/:code/stats", (req, res) => {
+    const stats = getLinkStats(database, req.params.code);
+    if (!stats) return res.status(404).json({ error: "link not found" });
+    return res.json(stats);
+  });
+
   app.get("/links/:code", (req, res) => {
     const link = findLinkByCode(database, req.params.code);
     if (!link) return res.status(404).json({ error: "link not found" });
@@ -84,6 +108,11 @@ export function createApp(options = {}) {
   app.get("/:code", (req, res) => {
     const link = findLinkByCode(database, req.params.code);
     if (!link) return res.status(404).json({ error: "link not found" });
+    insertClick(database, {
+      code: link.code,
+      clickedAt: now(),
+      referer: refererOrNull(req.get("referer")),
+    });
     return res.redirect(302, link.url);
   });
 

@@ -140,3 +140,155 @@ test("rejects duplicate custom codes with 409", async () => {
     await server.close();
   }
 });
+
+const STATS_CODE = "stats1";
+const STATS_URL = "https://example.com/stats";
+const CLICK_EPOCH_MS = Date.UTC(2026, 0, 2, 3, 4, 5);
+const CLICK_ISO = "2026-01-02T03:04:05.000Z";
+const CLICK_DAY = "2026-01-02";
+const REFERER_VALUE = "https://referrer.example/page";
+const SECOND_CLICK_EPOCH_MS = Date.UTC(2026, 0, 3, 12, 0, 0);
+const SECOND_CLICK_DAY = "2026-01-03";
+
+test("stats for a link with no clicks returns zeros and null lastClickedAt", async () => {
+  const server = await startServer(createTestApp());
+  try {
+    await postJson(server.baseUrl, "/links", { url: STATS_URL, code: STATS_CODE });
+    const response = await fetch(`${server.baseUrl}/links/${STATS_CODE}/stats`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      code: STATS_CODE,
+      url: STATS_URL,
+      totalClicks: 0,
+      lastClickedAt: null,
+      clicksByDay: {},
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("redirects record clicks with injectable now and referer; stats aggregate by UTC day", async () => {
+  const timestamps = [CLICK_EPOCH_MS, CLICK_EPOCH_MS, SECOND_CLICK_EPOCH_MS];
+  let timestampIndex = 0;
+  const server = await startServer(
+    createTestApp({
+      now: () => timestamps[timestampIndex++],
+    }),
+  );
+  try {
+    await postJson(server.baseUrl, "/links", { url: STATS_URL, code: STATS_CODE });
+
+    const withReferer = await fetch(`${server.baseUrl}/${STATS_CODE}`, {
+      redirect: "manual",
+      headers: { referer: REFERER_VALUE },
+    });
+    assert.equal(withReferer.status, 302);
+
+    const withoutReferer = await fetch(`${server.baseUrl}/${STATS_CODE}`, {
+      redirect: "manual",
+    });
+    assert.equal(withoutReferer.status, 302);
+
+    const nextDay = await fetch(`${server.baseUrl}/${STATS_CODE}`, {
+      redirect: "manual",
+    });
+    assert.equal(nextDay.status, 302);
+
+    const response = await fetch(`${server.baseUrl}/links/${STATS_CODE}/stats`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      code: STATS_CODE,
+      url: STATS_URL,
+      totalClicks: 3,
+      lastClickedAt: new Date(SECOND_CLICK_EPOCH_MS).toISOString(),
+      clicksByDay: {
+        [CLICK_DAY]: 2,
+        [SECOND_CLICK_DAY]: 1,
+      },
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("stats requests do not count as clicks", async () => {
+  const server = await startServer(
+    createTestApp({ now: () => CLICK_EPOCH_MS }),
+  );
+  try {
+    await postJson(server.baseUrl, "/links", { url: STATS_URL, code: STATS_CODE });
+    await fetch(`${server.baseUrl}/${STATS_CODE}`, { redirect: "manual" });
+
+    const before = await fetch(`${server.baseUrl}/links/${STATS_CODE}/stats`);
+    assert.equal((await before.json()).totalClicks, 1);
+
+    await fetch(`${server.baseUrl}/links/${STATS_CODE}/stats`);
+    await fetch(`${server.baseUrl}/links/${STATS_CODE}`);
+
+    const after = await fetch(`${server.baseUrl}/links/${STATS_CODE}/stats`);
+    assert.deepEqual(await after.json(), {
+      code: STATS_CODE,
+      url: STATS_URL,
+      totalClicks: 1,
+      lastClickedAt: CLICK_ISO,
+      clicksByDay: { [CLICK_DAY]: 1 },
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("stats for unknown code returns 404", async () => {
+  const server = await startServer(createTestApp());
+  try {
+    const response = await fetch(`${server.baseUrl}/links/missing/stats`);
+    assert.equal(response.status, 404);
+    const body = await response.json();
+    assert.equal(typeof body.error, "string");
+  } finally {
+    await server.close();
+  }
+});
+
+test("clicks persist across app restarts on the same database file", async () => {
+  const directory = mkdtempSync(join(tmpdir(), TEMP_DIR_PREFIX));
+  const databasePath = join(directory, SHARED_DATABASE_FILENAME);
+
+  const writerApp = createApp({
+    databasePath,
+    now: () => CLICK_EPOCH_MS,
+  });
+  const writerServer = await startServer(writerApp);
+  try {
+    await postJson(writerServer.baseUrl, "/links", {
+      url: STATS_URL,
+      code: STATS_CODE,
+    });
+    const redirect = await fetch(`${writerServer.baseUrl}/${STATS_CODE}`, {
+      redirect: "manual",
+      headers: { referer: REFERER_VALUE },
+    });
+    assert.equal(redirect.status, 302);
+  } finally {
+    await writerServer.close();
+  }
+
+  const readerApp = createApp({ databasePath });
+  const readerServer = await startServer(readerApp);
+  try {
+    const response = await fetch(
+      `${readerServer.baseUrl}/links/${STATS_CODE}/stats`,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      code: STATS_CODE,
+      url: STATS_URL,
+      totalClicks: 1,
+      lastClickedAt: CLICK_ISO,
+      clicksByDay: { [CLICK_DAY]: 1 },
+    });
+  } finally {
+    await readerServer.close();
+  }
+});

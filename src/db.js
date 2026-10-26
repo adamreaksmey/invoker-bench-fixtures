@@ -2,6 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 
 const SCHEMA_MIGRATIONS_TABLE = "schema_migrations";
 const LINKS_TABLE = "links";
+const CLICKS_TABLE = "clicks";
+const UTC_DATE_LENGTH = 10;
 
 const MIGRATIONS = [
   {
@@ -12,6 +14,20 @@ const MIGRATIONS = [
         url TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+    `,
+  },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE ${CLICKS_TABLE} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL,
+        clicked_at INTEGER NOT NULL,
+        referer TEXT,
+        FOREIGN KEY (code) REFERENCES ${LINKS_TABLE}(code)
+      );
+      CREATE INDEX clicks_code_clicked_at_idx
+        ON ${CLICKS_TABLE} (code, clicked_at);
     `,
   },
 ];
@@ -75,4 +91,52 @@ export function findLinkByCode(database, code) {
     )
     .get(code);
   return row ?? null;
+}
+
+export function insertClick(database, click) {
+  database
+    .prepare(
+      `INSERT INTO ${CLICKS_TABLE} (code, clicked_at, referer) VALUES (?, ?, ?)`,
+    )
+    .run(click.code, click.clickedAt, click.referer);
+}
+
+function utcDateKey(epochMs) {
+  return new Date(epochMs).toISOString().slice(0, UTC_DATE_LENGTH);
+}
+
+function buildClicksByDay(clickedAtValues) {
+  const clicksByDay = {};
+  for (const clickedAt of clickedAtValues) {
+    const day = utcDateKey(clickedAt);
+    clicksByDay[day] = (clicksByDay[day] ?? 0) + 1;
+  }
+  return clicksByDay;
+}
+
+export function getLinkStats(database, code) {
+  const link = findLinkByCode(database, code);
+  if (!link) return null;
+
+  const rows = database
+    .prepare(
+      `SELECT clicked_at AS clickedAt FROM ${CLICKS_TABLE}
+       WHERE code = ? ORDER BY clicked_at ASC`,
+    )
+    .all(code);
+
+  const clickedAtValues = rows.map((row) => row.clickedAt);
+  const totalClicks = clickedAtValues.length;
+  const lastClickedAt =
+    totalClicks === 0
+      ? null
+      : new Date(clickedAtValues[totalClicks - 1]).toISOString();
+
+  return {
+    code: link.code,
+    url: link.url,
+    totalClicks,
+    lastClickedAt,
+    clicksByDay: buildClicksByDay(clickedAtValues),
+  };
 }
