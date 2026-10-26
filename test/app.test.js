@@ -169,7 +169,13 @@ test("stats for a link with no clicks returns zeros and null lastClickedAt", asy
 });
 
 test("redirects record clicks with injectable now and referer; stats aggregate by UTC day", async () => {
-  const timestamps = [CLICK_EPOCH_MS, CLICK_EPOCH_MS, SECOND_CLICK_EPOCH_MS];
+  // First value is consumed by POST /links rate-limit window; rest are click times.
+  const timestamps = [
+    CLICK_EPOCH_MS,
+    CLICK_EPOCH_MS,
+    CLICK_EPOCH_MS,
+    SECOND_CLICK_EPOCH_MS,
+  ];
   let timestampIndex = 0;
   const server = await startServer(
     createTestApp({
@@ -290,5 +296,94 @@ test("clicks persist across app restarts on the same database file", async () =>
     });
   } finally {
     await readerServer.close();
+  }
+});
+
+const RATE_LIMIT_MAX = 3;
+const RATE_LIMIT_WINDOW_MS = 10000;
+const RATE_LIMIT_WINDOW_START_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
+const RATE_LIMIT_WITHIN_WINDOW_MS = RATE_LIMIT_WINDOW_START_MS + 2500;
+const RATE_LIMIT_NEXT_WINDOW_MS = RATE_LIMIT_WINDOW_START_MS + RATE_LIMIT_WINDOW_MS;
+const RATE_LIMITED_CODE = "limited";
+const EXPECTED_RETRY_AFTER_SECONDS = 8;
+
+test("POST /links allows rateLimitMax requests then returns 429 with Retry-After", async () => {
+  let currentTimeMs = RATE_LIMIT_WITHIN_WINDOW_MS;
+  const server = await startServer(
+    createTestApp({
+      rateLimitMax: RATE_LIMIT_MAX,
+      rateLimitWindowMs: RATE_LIMIT_WINDOW_MS,
+      now: () => currentTimeMs,
+    }),
+  );
+  try {
+    for (let index = 0; index < RATE_LIMIT_MAX; index += 1) {
+      const response = await postJson(server.baseUrl, "/links", {
+        url: `https://example.com/${index}`,
+      });
+      assert.equal(response.status, 201);
+    }
+
+    const limited = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/over",
+      code: RATE_LIMITED_CODE,
+    });
+    assert.equal(limited.status, 429);
+    const body = await limited.json();
+    assert.equal(typeof body.error, "string");
+    assert.ok(body.error.length > 0);
+
+    const retryAfter = Number(limited.headers.get("retry-after"));
+    assert.ok(Number.isInteger(retryAfter));
+    assert.ok(retryAfter >= 1);
+    assert.equal(retryAfter, EXPECTED_RETRY_AFTER_SECONDS);
+
+    assert.equal((await fetch(`${server.baseUrl}/links/${RATE_LIMITED_CODE}`)).status, 404);
+
+    currentTimeMs = RATE_LIMIT_NEXT_WINDOW_MS;
+    const afterWindow = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/next-window",
+      code: RATE_LIMITED_CODE,
+    });
+    assert.equal(afterWindow.status, 201);
+  } finally {
+    await server.close();
+  }
+});
+
+test("redirects and stats are never rate limited", async () => {
+  const server = await startServer(
+    createTestApp({
+      rateLimitMax: 1,
+      rateLimitWindowMs: RATE_LIMIT_WINDOW_MS,
+      now: () => RATE_LIMIT_WITHIN_WINDOW_MS,
+    }),
+  );
+  try {
+    const created = await postJson(server.baseUrl, "/links", {
+      url: STATS_URL,
+      code: STATS_CODE,
+    });
+    assert.equal(created.status, 201);
+
+    const limited = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/blocked",
+    });
+    assert.equal(limited.status, 429);
+
+    for (let index = 0; index < 5; index += 1) {
+      const redirect = await fetch(`${server.baseUrl}/${STATS_CODE}`, {
+        redirect: "manual",
+      });
+      assert.equal(redirect.status, 302);
+
+      const stats = await fetch(`${server.baseUrl}/links/${STATS_CODE}/stats`);
+      assert.equal(stats.status, 200);
+    }
+
+    const finalStats = await fetch(`${server.baseUrl}/links/${STATS_CODE}/stats`);
+    assert.equal((await finalStats.json()).totalClicks, 5);
+  } finally {
+    await server.close();
   }
 });
