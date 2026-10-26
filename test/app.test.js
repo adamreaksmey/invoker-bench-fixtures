@@ -189,3 +189,34 @@ test("click analytics persist across app restarts and unknown stats return 404",
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("limits link creation per IP and leaves redirects and stats unlimited", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "link-shortener-rate-limit-"));
+  const databasePath = join(directory, "links.sqlite");
+  let currentTime = 10_000;
+  const app = createApp({ databasePath, rateLimitMax: 2, rateLimitWindowMs: 10_000, now: () => currentTime });
+  const server = await startServer(app);
+  try {
+    const first = await postJson(server.baseUrl, "/links", { url: "https://example.com/first", code: "first" });
+    assert.equal(first.status, 201);
+    const second = await postJson(server.baseUrl, "/links", { url: "https://example.com/second", code: "second" });
+    assert.equal(second.status, 201);
+
+    const limited = await postJson(server.baseUrl, "/links", { url: "https://example.com/third", code: "third" });
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get("retry-after"), "10");
+    assert.equal(typeof (await limited.json()).error, "string");
+    assert.equal((await fetch(`${server.baseUrl}/links/third`)).status, 404);
+
+    assert.equal((await fetch(`${server.baseUrl}/first`, { redirect: "manual" })).status, 302);
+    assert.equal((await fetch(`${server.baseUrl}/links/first/stats`)).status, 200);
+
+    currentTime += 10_000;
+    const afterWindow = await postJson(server.baseUrl, "/links", { url: "https://example.com/third", code: "third" });
+    assert.equal(afterWindow.status, 201);
+  } finally {
+    await server.close();
+    app.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

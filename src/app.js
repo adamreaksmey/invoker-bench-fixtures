@@ -64,6 +64,10 @@ function migrate(database) {
 
 export function createApp(options = {}) {
   const databasePath = options.databasePath ?? process.env.DATABASE_PATH ?? "shortener.sqlite";
+  const rateLimitMax = options.rateLimitMax ?? Number(process.env.RATE_LIMIT_MAX ?? 20);
+  const rateLimitWindowMs = options.rateLimitWindowMs ?? Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60000);
+  const now = options.now ?? (() => Date.now());
+  const rateLimitWindows = new Map();
   const database = new DatabaseSync(databasePath);
   migrate(database);
   const getLink = database.prepare("SELECT code, url, created_at AS createdAt FROM links WHERE code = ?");
@@ -88,6 +92,20 @@ export function createApp(options = {}) {
   app.use(express.json({ limit: "16kb" }));
 
   app.post("/links", (req, res) => {
+    const currentTime = now();
+    const clientIp = req.ip;
+    const window = rateLimitWindows.get(clientIp);
+    if (!window || currentTime >= window.startedAt + rateLimitWindowMs) {
+      rateLimitWindows.set(clientIp, { startedAt: currentTime, count: 1 });
+    } else if (window.count >= rateLimitMax) {
+      const retryAfter = Math.max(1, Math.ceil((window.startedAt + rateLimitWindowMs - currentTime) / 1000));
+      return res
+        .status(429)
+        .set("Retry-After", String(retryAfter))
+        .json({ error: "rate limit exceeded" });
+    } else {
+      window.count += 1;
+    }
     const url = req.body?.url;
     if (typeof url !== "string" || url.length === 0) return res.status(400).json({ error: "url is required" });
     let parsedUrl;
@@ -142,7 +160,7 @@ export function createApp(options = {}) {
   app.get("/:code", (req, res) => {
     const link = getLink.get(req.params.code);
     if (!link) return res.status(404).json({ error: "link not found" });
-    saveClick.run(link.code, new Date(options.now?.() ?? Date.now()).toISOString(), req.get("referer") ?? null);
+    saveClick.run(link.code, new Date(now()).toISOString(), req.get("referer") ?? null);
     return res.redirect(302, link.url);
   });
 
