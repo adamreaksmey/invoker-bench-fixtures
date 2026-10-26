@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import request from "supertest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase } from "./db";
 import { createApp } from "./index";
@@ -55,5 +58,72 @@ describe("authentication and ledger API", () => {
     await request(server).get("/accounts").set("Cookie", aliceCookie).expect(200, [
       { id: "checking", name: "Checking" }, { id: "savings", name: "Savings" },
     ]);
+  });
+
+  it("supports account, transaction, filtered transaction, and balance operations", async () => {
+    const server = app();
+    const registered = await request(server).post("/auth/register")
+      .send({ username: "alice", password: "secret" }).expect(201);
+    const cookie = registered.headers["set-cookie"][0].split(";")[0];
+
+    await request(server).get("/accounts").set("Cookie", cookie).expect(200, []);
+    await request(server).post("/accounts").set("Cookie", cookie)
+      .send({ id: " checking ", name: " Main checking " })
+      .expect(201, { id: "checking", name: "Main checking" });
+    await request(server).post("/accounts").set("Cookie", cookie)
+      .send({ id: "savings", name: "Savings" }).expect(201);
+
+    await request(server).post("/transactions").set("Cookie", cookie)
+      .send({ id: "deposit", accountId: "checking", amountCents: 12550, description: " pay " })
+      .expect(201, { id: "deposit", accountId: "checking", amountCents: 12550, description: "pay" });
+    await request(server).post("/transactions").set("Cookie", cookie)
+      .send({ id: "withdrawal", accountId: "checking", amountCents: -250 }).expect(201);
+    await request(server).post("/transactions").set("Cookie", cookie)
+      .send({ id: "saving", accountId: "savings", amountCents: 900 }).expect(201);
+
+    await request(server).get("/transactions").set("Cookie", cookie).expect(200, [
+      { id: "deposit", accountId: "checking", amountCents: 12550, description: "pay" },
+      { id: "withdrawal", accountId: "checking", amountCents: -250 },
+      { id: "saving", accountId: "savings", amountCents: 900 },
+    ]);
+    await request(server).get("/transactions?accountId=checking").set("Cookie", cookie).expect(200, [
+      { id: "deposit", accountId: "checking", amountCents: 12550, description: "pay" },
+      { id: "withdrawal", accountId: "checking", amountCents: -250 },
+    ]);
+    await request(server).get("/accounts/checking/balance").set("Cookie", cookie)
+      .expect(200, { balanceCents: 12300 });
+    await request(server).post("/transactions").set("Cookie", cookie)
+      .send({ id: "missing", accountId: "unknown", amountCents: 1 }).expect(404);
+  });
+
+  it("survives a new app instance using the same database", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ledger-api-"));
+    const filename = join(directory, "ledger.sqlite");
+    let firstDb: DatabaseSync | undefined;
+    let secondDb: DatabaseSync | undefined;
+    try {
+      firstDb = openDatabase(filename);
+      const firstApp = createApp({ db: firstDb, sessionSecret: "test-session-secret" });
+      const registered = await request(firstApp).post("/auth/register")
+        .send({ username: "alice", password: "secret" }).expect(201);
+      const cookie = registered.headers["set-cookie"][0].split(";")[0];
+      await request(firstApp).post("/accounts").set("Cookie", cookie)
+        .send({ id: "checking", name: "Checking" }).expect(201);
+      await request(firstApp).post("/transactions").set("Cookie", cookie)
+        .send({ id: "deposit", accountId: "checking", amountCents: 12550 }).expect(201);
+      firstDb.close();
+      firstDb = undefined;
+
+      secondDb = openDatabase(filename);
+      const secondApp = createApp({ db: secondDb, sessionSecret: "test-session-secret" });
+      await request(secondApp).get("/accounts").set("Cookie", cookie)
+        .expect(200, [{ id: "checking", name: "Checking" }]);
+      await request(secondApp).get("/accounts/checking/balance").set("Cookie", cookie)
+        .expect(200, { balanceCents: 12550 });
+    } finally {
+      secondDb?.close();
+      firstDb?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
