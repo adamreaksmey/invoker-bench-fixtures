@@ -51,11 +51,11 @@ export function createApp(options = {}) {
 
   app.get("/search", (req, res) => {
     const query = typeof req.query.q === "string" ? req.query.q : "";
-    const results = listSlugs(pagesDir)
-      .map((slug) => readPage(pagesDir, slug))
-      .filter((page) => page.body.includes(query))
-      .map(({ slug, title }) => ({ slug, title }));
-    res.json({ query, results });
+    if (!query.trim()) {
+      return res.status(400).json({ error: "missing or blank query" });
+    }
+    const results = wikiIndex.search(query);
+    return res.json({ query, results });
   });
 
   return app;

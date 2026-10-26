@@ -43,11 +43,92 @@ test("lists, reads, creates, updates, and deletes pages", async () => {
   }
 });
 
-test("search finds pages containing the query", async () => {
+test("search finds pages containing the query (case-insensitive)", async () => {
   const server = await startServer(makeApp());
   try {
-    const response = await (await fetch(`${server.baseUrl}/search?q=Start`)).json();
+    const response = await (await fetch(`${server.baseUrl}/search?q=start`)).json();
+    assert.equal(response.query, "start");
     assert.deepEqual(response.results.map((result) => result.slug), ["welcome"]);
+    assert.equal(typeof response.results[0].score, "number");
+    assert.ok(response.results[0].snippet.includes("**"));
+    assert.match(response.results[0].snippet, /\*\*[^*]*[Ss]tart[^*]*\*\*/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("search requires a non-blank q", async () => {
+  const server = await startServer(makeApp());
+  try {
+    const missing = await fetch(`${server.baseUrl}/search`);
+    assert.equal(missing.status, 400);
+    assert.equal(typeof (await missing.json()).error, "string");
+
+    const blank = await fetch(`${server.baseUrl}/search?q=${encodeURIComponent("   ")}`);
+    assert.equal(blank.status, 400);
+    assert.equal(typeof (await blank.json()).error, "string");
+  } finally {
+    await server.close();
+  }
+});
+
+test("search ANDs terms, ranks title matches above body, and caps at 20", async () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  writeFileSync(join(pagesDir, "title-hit.md"), "# UniqueAlpha\n\nUnrelated body text.\n");
+  writeFileSync(join(pagesDir, "body-hit.md"), "# Other page\n\nMentions UniqueAlpha in the body only.\n");
+  writeFileSync(join(pagesDir, "both-terms.md"), "# Guide\n\nUniqueAlpha UniqueBeta together.\n");
+  writeFileSync(join(pagesDir, "one-term.md"), "# Partial\n\nOnly UniqueAlpha here.\n");
+  for (let index = 0; index < 25; index += 1) {
+    writeFileSync(
+      join(pagesDir, `filler-${String(index).padStart(2, "0")}.md`),
+      `# Filler ${index}\n\nSharedNeedle content ${index}.\n`,
+    );
+  }
+
+  const server = await startServer(makeApp(pagesDir));
+  try {
+    const andResponse = await (await fetch(
+      `${server.baseUrl}/search?q=${encodeURIComponent("UniqueAlpha UniqueBeta")}`,
+    )).json();
+    assert.deepEqual(andResponse.results.map((result) => result.slug), ["both-terms"]);
+
+    const ranked = await (await fetch(
+      `${server.baseUrl}/search?q=${encodeURIComponent("UniqueAlpha")}`,
+    )).json();
+    assert.ok(ranked.results.length >= 2);
+    assert.equal(ranked.results[0].slug, "title-hit");
+    assert.ok(ranked.results[0].score > ranked.results[1].score);
+
+    const limited = await (await fetch(
+      `${server.baseUrl}/search?q=${encodeURIComponent("SharedNeedle")}`,
+    )).json();
+    assert.equal(limited.results.length, 20);
+    for (let index = 1; index < limited.results.length; index += 1) {
+      assert.ok(limited.results[index - 1].score >= limited.results[index].score);
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("search treats punctuation and quotes as plain text and never 500s", async () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  writeFileSync(join(pagesDir, "punct.md"), "# Punct\n\nHello world and C++ notes.\n");
+  const server = await startServer(makeApp(pagesDir));
+  try {
+    const quoted = await fetch(`${server.baseUrl}/search?q=${encodeURIComponent('"Hello"')}`);
+    assert.equal(quoted.status, 200);
+    const quotedBody = await quoted.json();
+    assert.deepEqual(quotedBody.results.map((result) => result.slug), ["punct"]);
+
+    const operators = await fetch(
+      `${server.baseUrl}/search?q=${encodeURIComponent('Hello AND OR NOT * ( ) ^ : "world"')}`,
+    );
+    assert.equal(operators.status, 200);
+    assert.equal(Array.isArray((await operators.json()).results), true);
+
+    const plusPlus = await fetch(`${server.baseUrl}/search?q=${encodeURIComponent("C++")}`);
+    assert.equal(plusPlus.status, 200);
   } finally {
     await server.close();
   }

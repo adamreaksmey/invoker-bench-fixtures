@@ -161,6 +161,74 @@ export function getSchemaVersion(db) {
   return currentSchemaVersion(db);
 }
 
+const MAX_SEARCH_RESULTS = 20;
+const SLUG_BM25_WEIGHT = 0;
+const TITLE_BM25_WEIGHT = 10;
+const BODY_BM25_WEIGHT = 1;
+const SNIPPET_BODY_COLUMN = 2;
+const SNIPPET_MARK_START = "**";
+const SNIPPET_MARK_END = "**";
+const SNIPPET_ELLIPSIS = "...";
+const SNIPPET_TOKEN_LIMIT = 32;
+
+export function buildFtsMatchQuery(rawQuery) {
+  const terms = String(rawQuery)
+    .trim()
+    .split(/\s+/)
+    .filter((term) => term.length > 0)
+    .map((term) => `"${term.replaceAll('"', '""')}"`);
+  if (terms.length === 0) return null;
+  return terms.join(" AND ");
+}
+
+export function searchPages(db, rawQuery) {
+  const matchQuery = buildFtsMatchQuery(rawQuery);
+  if (!matchQuery) return [];
+
+  try {
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          ${PAGES_FTS_TABLE}.slug AS slug,
+          ${PAGES_TABLE}.title AS title,
+          snippet(
+            ${PAGES_FTS_TABLE},
+            ${SNIPPET_BODY_COLUMN},
+            ?,
+            ?,
+            ?,
+            ${SNIPPET_TOKEN_LIMIT}
+          ) AS snippet,
+          (
+            -bm25(
+              ${PAGES_FTS_TABLE},
+              ${SLUG_BM25_WEIGHT},
+              ${TITLE_BM25_WEIGHT},
+              ${BODY_BM25_WEIGHT}
+            )
+          ) AS score
+        FROM ${PAGES_FTS_TABLE}
+        JOIN ${PAGES_TABLE}
+          ON ${PAGES_TABLE}.slug = ${PAGES_FTS_TABLE}.slug
+        WHERE ${PAGES_FTS_TABLE} MATCH ?
+        ORDER BY score DESC
+        LIMIT ${MAX_SEARCH_RESULTS}
+      `,
+      )
+      .all(SNIPPET_MARK_START, SNIPPET_MARK_END, SNIPPET_ELLIPSIS, matchQuery);
+
+    return rows.map((row) => ({
+      slug: row.slug,
+      title: row.title,
+      snippet: row.snippet,
+      score: Number(row.score),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export function openWikiIndex(indexPath = DEFAULT_INDEX_PATH) {
   const db = new DatabaseSync(indexPath);
   db.exec("PRAGMA foreign_keys = ON");
@@ -186,6 +254,9 @@ export function createWikiIndex(indexPath = DEFAULT_INDEX_PATH) {
     },
     listSlugs() {
       return listIndexedSlugs(db);
+    },
+    search(query) {
+      return searchPages(db, query);
     },
     schemaVersion() {
       return getSchemaVersion(db);
