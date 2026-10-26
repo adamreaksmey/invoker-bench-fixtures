@@ -140,8 +140,8 @@ export function openIndex(indexPath, pagesDir) {
     pagesForTag(tag) {
       return db.prepare(`
         SELECT p.slug, p.title FROM pages p JOIN page_tags t ON t.slug = p.slug
-        WHERE lower(t.tag) = lower(?) ORDER BY p.slug
-      `).all(tag);
+        WHERE t.tag = ? ORDER BY p.slug
+      `).all(tag.toLowerCase());
     },
     close() {
       db.close();

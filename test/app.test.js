@@ -156,15 +156,23 @@ test("ranks title matches above body matches and returns safe snippets", async (
 test("lists tags and finds pages by tag case-insensitively", async () => {
   const pagesDir = makePagesDir();
   writeFileSync(join(pagesDir, "second.md"), "---\ntitle: Second\ntags: ops, docs\n---\nBody\n");
+  writeFileSync(join(pagesDir, "first.md"), "---\ntitle: First\ntags: OPS\n---\nBody\n");
   const app = createApp({ pagesDir, indexPath: makeIndexPath() });
   const server = await startServer(app);
   try {
     assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), [
       { tag: "docs", count: 2 },
+      { tag: "ops", count: 2 },
       { tag: "onboarding", count: 1 },
-      { tag: "ops", count: 1 },
     ]);
-    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/OPS`)).json(), [{ slug: "second", title: "Second" }]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/OPS`)).json(), [
+      { slug: "first", title: "First" },
+      { slug: "second", title: "Second" },
+    ]);
+    assert.equal((await putPage(server.baseUrl, "second", "---\ntitle: Updated second\ntags: docs\n---\nBody\n")).status, 200);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/OPS`)).json(), [{ slug: "first", title: "First" }]);
+    assert.equal((await fetch(`${server.baseUrl}/pages/first`, { method: "DELETE" })).status, 204);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/OPS`)).json(), []);
     assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/missing`)).json(), []);
   } finally {
     await server.close();
