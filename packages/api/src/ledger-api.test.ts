@@ -21,6 +21,7 @@ const DEPOSIT_CENTS = 125_050;
 const RENT_CENTS = -80_025;
 const TRANSFER_CENTS = 10_000;
 const CHECKING_BALANCE_CENTS = 45_025;
+const EMPTY_BALANCE_CENTS = 0;
 
 describe("persisted ledger API", () => {
   let db: DatabaseSync | undefined;
@@ -187,64 +188,88 @@ describe("persisted ledger API", () => {
       .expect(400);
   });
 
-  it("returns the same ledger data from a new createApp on the same DATABASE_PATH", async () => {
+  it("preserves accounts, transactions, and balances across createApp restart on DATABASE_PATH", async () => {
     const dbPath = createTempDbPath();
-    const firstDb = openDatabase(dbPath);
-    const firstApp = createApp({ db: firstDb, sessionSecret: SESSION_SECRET });
-    const registered = await request(firstApp)
-      .post("/auth/register")
-      .send({ username: USERNAME, password: PASSWORD })
-      .expect(201);
-    const cookie = sessionCookie(registered);
+    const previousDbPath = process.env.DATABASE_PATH;
+    process.env.DATABASE_PATH = dbPath;
 
-    await request(firstApp)
-      .post("/accounts")
-      .set("Cookie", cookie)
-      .send({ id: CHECKING_ID, name: "Checking" })
-      .expect(201);
-    await request(firstApp)
-      .post("/transactions")
-      .set("Cookie", cookie)
-      .send({
-        id: PAY_TX_ID,
-        accountId: CHECKING_ID,
-        amountCents: DEPOSIT_CENTS,
-        description: "paycheck",
-      })
-      .expect(201);
-    await request(firstApp)
-      .get(`/accounts/${CHECKING_ID}/balance`)
-      .set("Cookie", cookie)
-      .expect(200, { balanceCents: DEPOSIT_CENTS });
-    firstDb.close();
+    try {
+      const firstDb = openDatabase(dbPath);
+      const firstApp = createApp({ db: firstDb, sessionSecret: SESSION_SECRET });
+      const registered = await request(firstApp)
+        .post("/auth/register")
+        .send({ username: USERNAME, password: PASSWORD })
+        .expect(201);
+      const cookie = sessionCookie(registered);
 
-    db = openDatabase(dbPath);
-    const secondApp = createApp({ db, sessionSecret: SESSION_SECRET });
-    const login = await request(secondApp)
-      .post("/auth/login")
-      .send({ username: USERNAME, password: PASSWORD })
-      .expect(200);
-    const secondCookie = sessionCookie(login);
-
-    await request(secondApp)
-      .get("/accounts")
-      .set("Cookie", secondCookie)
-      .expect(200, [{ id: CHECKING_ID, name: "Checking" }]);
-    await request(secondApp)
-      .get("/transactions")
-      .set("Cookie", secondCookie)
-      .expect(200, [
-        {
+      await request(firstApp)
+        .post("/accounts")
+        .set("Cookie", cookie)
+        .send({ id: CHECKING_ID, name: "Checking" })
+        .expect(201);
+      await request(firstApp)
+        .post("/accounts")
+        .set("Cookie", cookie)
+        .send({ id: SAVINGS_ID, name: "Savings" })
+        .expect(201);
+      await request(firstApp)
+        .post("/transactions")
+        .set("Cookie", cookie)
+        .send({
           id: PAY_TX_ID,
           accountId: CHECKING_ID,
           amountCents: DEPOSIT_CENTS,
           description: "paycheck",
-        },
-      ]);
-    await request(secondApp)
-      .get(`/accounts/${CHECKING_ID}/balance`)
-      .set("Cookie", secondCookie)
-      .expect(200, { balanceCents: DEPOSIT_CENTS });
+        })
+        .expect(201);
+      await request(firstApp)
+        .post("/transactions")
+        .set("Cookie", cookie)
+        .send({ id: RENT_TX_ID, accountId: CHECKING_ID, amountCents: RENT_CENTS })
+        .expect(201);
+      await request(firstApp)
+        .get(`/accounts/${CHECKING_ID}/balance`)
+        .set("Cookie", cookie)
+        .expect(200, { balanceCents: CHECKING_BALANCE_CENTS });
+      firstDb.close();
+
+      const secondApp = createApp({ sessionSecret: SESSION_SECRET });
+      const login = await request(secondApp)
+        .post("/auth/login")
+        .send({ username: USERNAME, password: PASSWORD })
+        .expect(200);
+      const secondCookie = sessionCookie(login);
+
+      await request(secondApp)
+        .get("/accounts")
+        .set("Cookie", secondCookie)
+        .expect(200, [
+          { id: CHECKING_ID, name: "Checking" },
+          { id: SAVINGS_ID, name: "Savings" },
+        ]);
+      await request(secondApp)
+        .get("/transactions")
+        .set("Cookie", secondCookie)
+        .expect(200, [
+          {
+            id: PAY_TX_ID,
+            accountId: CHECKING_ID,
+            amountCents: DEPOSIT_CENTS,
+            description: "paycheck",
+          },
+          { id: RENT_TX_ID, accountId: CHECKING_ID, amountCents: RENT_CENTS },
+        ]);
+      await request(secondApp)
+        .get(`/accounts/${CHECKING_ID}/balance`)
+        .set("Cookie", secondCookie)
+        .expect(200, { balanceCents: CHECKING_BALANCE_CENTS });
+      await request(secondApp)
+        .get(`/accounts/${SAVINGS_ID}/balance`)
+        .set("Cookie", secondCookie)
+        .expect(200, { balanceCents: EMPTY_BALANCE_CENTS });
+    } finally {
+      restoreEnv("DATABASE_PATH", previousDbPath);
+    }
   });
 
   async function openAuthenticatedApp() {
@@ -268,4 +293,9 @@ function sessionCookie(response: { headers: Record<string, unknown> }): string {
   const first = Array.isArray(setCookie) ? setCookie[0] : setCookie;
   if (typeof first !== "string") throw new Error("Expected Set-Cookie header");
   return first.split(";")[0];
+}
+
+function restoreEnv(name: string, previous: string | undefined): void {
+  if (previous === undefined) delete process.env[name];
+  else process.env[name] = previous;
 }
