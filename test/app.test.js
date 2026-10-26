@@ -1,10 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createApp } from "../src/app.js";
 import { postJson, startServer } from "./helpers.js";
 
 test("creates a link and redirects to it", async () => {
-  const server = await startServer(createApp());
+  const app = createApp();
+  const server = await startServer(app);
   try {
     const created = await postJson(server.baseUrl, "/links", { url: "https://example.com/docs" });
     assert.equal(created.status, 201);
@@ -16,11 +20,13 @@ test("creates a link and redirects to it", async () => {
     assert.equal(redirect.headers.get("location"), "https://example.com/docs");
   } finally {
     await server.close();
+    app.locals.close();
   }
 });
 
 test("returns link metadata and 404 for unknown codes", async () => {
-  const server = await startServer(createApp());
+  const app = createApp();
+  const server = await startServer(app);
   try {
     await postJson(server.baseUrl, "/links", { url: "https://example.com", code: "home" });
     const found = await fetch(`${server.baseUrl}/links/home`);
@@ -29,5 +35,40 @@ test("returns link metadata and 404 for unknown codes", async () => {
     assert.equal((await fetch(`${server.baseUrl}/links/missing`)).status, 404);
   } finally {
     await server.close();
+    app.locals.close();
+  }
+});
+
+test("links persist when a new app instance opens the same database file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "link-shortener-"));
+  const databasePath = join(directory, "links.sqlite");
+  const firstApp = createApp({ databasePath });
+  const firstServer = await startServer(firstApp);
+  let code;
+  try {
+    const created = await postJson(firstServer.baseUrl, "/links", {
+      url: "https://example.com/persisted",
+      code: "persisted",
+    });
+    assert.equal(created.status, 201);
+    ({ code } = await created.json());
+  } finally {
+    await firstServer.close();
+    firstApp.locals.close();
+  }
+
+  const secondApp = createApp({ databasePath });
+  const secondServer = await startServer(secondApp);
+  try {
+    const found = await fetch(`${secondServer.baseUrl}/links/${code}`);
+    assert.equal(found.status, 200);
+    const link = await found.json();
+    assert.equal(link.code, "persisted");
+    assert.equal(link.url, "https://example.com/persisted");
+    assert.ok(Number.isFinite(Date.parse(link.createdAt)));
+  } finally {
+    await secondServer.close();
+    secondApp.locals.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
