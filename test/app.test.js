@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../src/app.js";
 import { postJson, startServer } from "./helpers.js";
 
@@ -106,6 +107,15 @@ test("links persist when a new app instance opens the same database file", async
     assert.equal(link.code, "persisted");
     assert.equal(link.url, "https://example.com/persisted");
     assert.ok(Number.isFinite(Date.parse(link.createdAt)));
+    const database = new DatabaseSync(databasePath);
+    try {
+      assert.deepEqual(
+        database.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version),
+        [1, 2],
+      );
+    } finally {
+      database.close();
+    }
   } finally {
     await secondServer.close();
     secondApp.locals.close();
@@ -155,6 +165,16 @@ test("records redirect clicks and reports UTC click statistics", async () => {
       clicksByDay: { "2026-01-02": 2, "2026-01-03": 1 },
     });
     assert.equal((await fetch(`${server.baseUrl}/links/stats/stats`)).status, 200);
+    assert.equal((await (await fetch(`${server.baseUrl}/links/stats/stats`)).json()).totalClicks, 3);
+    const database = new DatabaseSync(databasePath);
+    try {
+      assert.deepEqual(
+        database.prepare("SELECT referer FROM clicks ORDER BY id").all().map((row) => row.referer),
+        ["https://example.com/source", null, null],
+      );
+    } finally {
+      database.close();
+    }
   } finally {
     await server.close();
     app.locals.close();
