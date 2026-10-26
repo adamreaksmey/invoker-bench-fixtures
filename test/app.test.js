@@ -114,18 +114,22 @@ test("search ANDs every term and treats punctuation as plain text", async () => 
 test("synchronizes changed, added, and removed files when reopening the app", async () => {
   const pagesDir = makePagesDir();
   const indexPath = makeIndexPath();
+  writeFileSync(join(pagesDir, "stale.md"), "# Stale page\n\nRemove me\n");
   let app = createApp({ pagesDir, indexPath });
   app.locals.close();
   writeFileSync(join(pagesDir, "welcome.md"), "---\ntitle: Updated\ntags: [ops]\n---\nUpdated body\n");
   writeFileSync(join(pagesDir, "new-page.md"), "# New page\n\nNew body\n");
-  rmSync(join(pagesDir, "welcome.md"));
+  rmSync(join(pagesDir, "stale.md"));
   app = createApp({ pagesDir, indexPath });
   const server = await startServer(app);
   try {
-    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [{
-      slug: "new-page", title: "New page", tags: [],
-    }]);
-    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=updated`)).json()).results, []);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [
+      { slug: "new-page", title: "New page", tags: [] },
+      { slug: "welcome", title: "Updated", tags: ["ops"] },
+    ]);
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/pages/welcome`)).json()).body, "Updated body\n");
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=updated`)).json()).results.map(({ slug }) => slug), ["welcome"]);
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=stale`)).json()).results, []);
   } finally {
     await server.close();
     app.locals.close();
@@ -147,6 +151,24 @@ test("ranks title matches above body matches and returns safe snippets", async (
     assert.equal(typeof needle.results[0].score, "number");
     assert.equal((await fetch(`${server.baseUrl}/search?q=%22%5B%5D`)).status, 200);
     assert.equal((await fetch(`${server.baseUrl}/search`)).status, 400);
+  } finally {
+    await server.close();
+    app.locals.close();
+  }
+});
+
+test("limits search results to 20 and preserves the submitted query", async () => {
+  const pagesDir = makePagesDir();
+  for (let number = 0; number < 21; number += 1) {
+    writeFileSync(join(pagesDir, `result-${number}.md`), `# Result ${number}\n\ncommon search term\n`);
+  }
+  const app = createApp({ pagesDir, indexPath: makeIndexPath() });
+  const server = await startServer(app);
+  try {
+    const response = await (await fetch(`${server.baseUrl}/search?q=COMMON%20search`)).json();
+    assert.equal(response.query, "COMMON search");
+    assert.equal(response.results.length, 20);
+    assert.ok(response.results.every(({ score }) => typeof score === "number"));
   } finally {
     await server.close();
     app.locals.close();
