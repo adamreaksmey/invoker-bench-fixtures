@@ -229,6 +229,39 @@ export function searchPages(db, rawQuery) {
   }
 }
 
+export function listTagsWithCounts(db) {
+  return db
+    .prepare(
+      `
+      SELECT tag, COUNT(*) AS count
+      FROM ${PAGE_TAGS_TABLE}
+      GROUP BY tag
+      ORDER BY count DESC, tag ASC
+    `,
+    )
+    .all()
+    .map((row) => ({ tag: row.tag, count: Number(row.count) }));
+}
+
+export function listPagesByTag(db, rawTag) {
+  const tag = String(rawTag).trim().toLowerCase();
+  if (!tag) return [];
+
+  return db
+    .prepare(
+      `
+      SELECT ${PAGES_TABLE}.slug AS slug, ${PAGES_TABLE}.title AS title
+      FROM ${PAGE_TAGS_TABLE}
+      JOIN ${PAGES_TABLE}
+        ON ${PAGES_TABLE}.slug = ${PAGE_TAGS_TABLE}.slug
+      WHERE ${PAGE_TAGS_TABLE}.tag = ?
+      ORDER BY ${PAGES_TABLE}.slug ASC
+    `,
+    )
+    .all(tag)
+    .map((row) => ({ slug: row.slug, title: row.title }));
+}
+
 export function openWikiIndex(indexPath = DEFAULT_INDEX_PATH) {
   const db = new DatabaseSync(indexPath);
   db.exec("PRAGMA foreign_keys = ON");
@@ -257,6 +290,12 @@ export function createWikiIndex(indexPath = DEFAULT_INDEX_PATH) {
     },
     search(query) {
       return searchPages(db, query);
+    },
+    listTags() {
+      return listTagsWithCounts(db);
+    },
+    pagesByTag(tag) {
+      return listPagesByTag(db, tag);
     },
     schemaVersion() {
       return getSchemaVersion(db);

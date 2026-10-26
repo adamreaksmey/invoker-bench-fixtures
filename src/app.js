@@ -58,5 +58,13 @@ export function createApp(options = {}) {
     return res.json({ query, results });
   });
 
+  app.get("/tags", (_req, res) => {
+    res.json(wikiIndex.listTags());
+  });
+
+  app.get("/tags/:tag", (req, res) => {
+    res.json(wikiIndex.pagesByTag(req.params.tag));
+  });
+
   return app;
 }

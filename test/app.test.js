@@ -318,3 +318,66 @@ test("schema version table and FTS5 content are persisted", () => {
     db.close();
   }
 });
+
+test("GET /tags returns tag counts sorted by count desc then tag asc", async () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  writeFileSync(
+    join(pagesDir, "alpha.md"),
+    "---\ntitle: Alpha\ntags: [ops, deploy]\n---\nAlpha.\n",
+  );
+  writeFileSync(
+    join(pagesDir, "beta.md"),
+    "---\ntitle: Beta\ntags: [ops, wiki]\n---\nBeta.\n",
+  );
+  writeFileSync(
+    join(pagesDir, "gamma.md"),
+    "---\ntitle: Gamma\ntags: [ops]\n---\nGamma.\n",
+  );
+  writeFileSync(join(pagesDir, "plain.md"), "# Plain\n\nNo tags.\n");
+
+  const server = await startServer(makeApp(pagesDir));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), [
+      { tag: "ops", count: 3 },
+      { tag: "deploy", count: 1 },
+      { tag: "wiki", count: 1 },
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("GET /tags/:tag lists pages by slug; case-insensitive; unknown tag is []", async () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  writeFileSync(
+    join(pagesDir, "zebra.md"),
+    "---\ntitle: Zebra\ntags: [ops]\n---\nZ.\n",
+  );
+  writeFileSync(
+    join(pagesDir, "alpha.md"),
+    "---\ntitle: Alpha\ntags: [Ops, deploy]\n---\nA.\n",
+  );
+  writeFileSync(
+    join(pagesDir, "middle.md"),
+    "---\ntitle: Middle\ntags: [deploy]\n---\nM.\n",
+  );
+
+  const server = await startServer(makeApp(pagesDir));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/ops`)).json(), [
+      { slug: "alpha", title: "Alpha" },
+      { slug: "zebra", title: "Zebra" },
+    ]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/OPS`)).json(), [
+      { slug: "alpha", title: "Alpha" },
+      { slug: "zebra", title: "Zebra" },
+    ]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/deploy`)).json(), [
+      { slug: "alpha", title: "Alpha" },
+      { slug: "middle", title: "Middle" },
+    ]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/missing`)).json(), []);
+  } finally {
+    await server.close();
+  }
+});
