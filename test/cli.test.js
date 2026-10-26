@@ -38,6 +38,31 @@ test("groups and sums a column", () => {
   assert.match(result.stdout, /south\s+2/);
 });
 
+test("groups by ascending key and adds rounded sums and counts in column order", () => {
+  const result = runCli([
+    writeCsv("region,amount\nz,0.105\na,2.1\nz,0.105\na,1.2\n"),
+    "--group-by", "region", "--sum", "amount", "--count",
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.stdout.trim().split("\n"), [
+    "region  sum_amount  count",
+    "a       3.3         2",
+    "z       0.21        2",
+  ]);
+});
+
+test("group-by without sum or count emits one sorted row per group", () => {
+  const result = runCli([writeCsv("region,amount\nz,1\na,2\nz,3\n"), "--group-by", "region"]);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.stdout.trim().split("\n"), ["region", "a", "z"]);
+});
+
+test("count can be requested without sum", () => {
+  const result = runCli([writeCsv("region\nb\na\nb\n"), "--group-by", "region", "--count"]);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.stdout.trim().split("\n"), ["region  count", "a       1", "b       2"]);
+});
+
 test("prints usage without an input file", () => {
   const result = runCli([]);
   assert.equal(result.exitCode, 1);
