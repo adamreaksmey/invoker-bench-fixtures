@@ -109,11 +109,28 @@ test("rejects invalid custom codes with 400", async () => {
       assert.ok(body.error.length > 0);
     }
 
-    const valid = await postJson(server.baseUrl, "/links", {
-      url: "https://example.com",
-      code: "ok_Code-123",
-    });
-    assert.equal(valid.status, 201);
+    for (const code of ["abc", "a".repeat(32), "ok_Code-123"]) {
+      const valid = await postJson(server.baseUrl, "/links", {
+        url: "https://example.com",
+        code,
+      });
+      assert.equal(valid.status, 201);
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("rejects missing or empty url with 400", async () => {
+  const server = await startServer(createTestApp());
+  try {
+    for (const body of [{}, { url: "" }, { url: null }]) {
+      const response = await postJson(server.baseUrl, "/links", body);
+      assert.equal(response.status, 400);
+      const payload = await response.json();
+      assert.equal(typeof payload.error, "string");
+      assert.ok(payload.error.length > 0);
+    }
   } finally {
     await server.close();
   }
