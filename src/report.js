@@ -24,3 +24,18 @@ export function formatTable(rows) {
   const formatLine = (cells) => cells.map((cell, index) => String(cell).padEnd(widths[index])).join("  ").trimEnd();
   return [formatLine(columns), ...rows.map((row) => formatLine(columns.map((column) => row[column])))].join("\n") + "\n";
 }
+
+export function formatCsv(rows) {
+  const columns = rows.length ? Object.keys(rows[0]) : [];
+  const quote = (value) => {
+    const text = String(value ?? "");
+    return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  };
+  return [columns, ...rows.map((row) => columns.map((column) => row[column]))]
+    .map((record) => record.map(quote).join(","))
+    .join("\n") + "\n";
+}
+
+export function formatJson(rows) {
+  return `${JSON.stringify(rows, null, 2)}\n`;
+}

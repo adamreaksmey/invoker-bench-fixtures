@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.js";
@@ -29,6 +29,34 @@ test("prints rows as a table", () => {
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /apple\s+2/);
   assert.match(result.stdout, /pear\s+5/);
+});
+
+test("prints pretty JSON with numeric values and a trailing newline", () => {
+  const schema = writeSchema({ columns: { qty: { type: "integer" } } });
+  const result = runCli([writeCsv("name,qty\napple,2\npear,5\n"), "--schema", schema, "--format", "json"]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, '[\n  {\n    "name": "apple",\n    "qty": 2\n  },\n  {\n    "name": "pear",\n    "qty": 5\n  }\n]\n');
+});
+
+test("prints CSV with minimal RFC quoting, LF endings, and a trailing newline", () => {
+  const result = runCli([writeCsv('name,note\napple,plain\npear,"ripe, sweet"\nquote,"say ""hi"""\n'), "--format", "csv"]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, 'name,note\napple,plain\npear,"ripe, sweet"\nquote,"say ""hi"""\n');
+});
+
+test("writes selected format to --out without writing stdout", () => {
+  const outputPath = join(mkdtempSync(join(tmpdir(), "csvreport-")), "report.json");
+  const result = runCli([writeCsv("name\napple\n"), "--format", "json", "--out", outputPath]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(readFileSync(outputPath, "utf8"), '[\n  {\n    "name": "apple"\n  }\n]\n');
+});
+
+test("rejects an unsupported output format", () => {
+  const result = runCli([writeCsv("name\napple\n"), "--format", "xml"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^error:/);
 });
 
 test("groups and sums a column", () => {
