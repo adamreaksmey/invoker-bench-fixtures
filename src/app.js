@@ -77,9 +77,14 @@ function migrate(database) {
 
 export function createApp(options = {}) {
   const databasePath = options.databasePath ?? process.env.DATABASE_PATH ?? "shortener.sqlite";
+  const rateLimitMax = options.rateLimitMax ?? Number(process.env.RATE_LIMIT_MAX ?? 20);
+  const rateLimitWindowMs =
+    options.rateLimitWindowMs ?? Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60000);
   const now = options.now ?? (() => Date.now());
   const database = new DatabaseSync(databasePath);
   migrate(database);
+
+  const rateLimitWindows = new Map();
 
   const insertLink = database.prepare(
     "INSERT INTO links (code, url, created_at) VALUES (?, ?, ?)",
@@ -98,6 +103,23 @@ export function createApp(options = {}) {
   app.use(express.json({ limit: "16kb" }));
 
   app.post("/links", (req, res) => {
+    const currentTime = now();
+    const clientIp = req.ip;
+    let window = rateLimitWindows.get(clientIp);
+    if (!window || currentTime >= window.startedAt + rateLimitWindowMs) {
+      window = { startedAt: currentTime, count: 0 };
+      rateLimitWindows.set(clientIp, window);
+    }
+    if (window.count >= rateLimitMax) {
+      const retryAfter = Math.max(
+        1,
+        Math.ceil((window.startedAt + rateLimitWindowMs - currentTime) / 1000),
+      );
+      res.set("Retry-After", String(retryAfter));
+      return res.status(429).json({ error: "rate limit exceeded" });
+    }
+    window.count += 1;
+
     const body = req.body ?? {};
     const url = body.url;
     if (!isHttpUrl(url)) return res.status(400).json({ error: "url must be an absolute http or https URL" });

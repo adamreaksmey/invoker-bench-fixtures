@@ -198,3 +198,79 @@ test("click analytics persist across app instances", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("rate limits link creation by IP within a fixed window", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp("/tmp/link-shortener-rate-limit-");
+  const databasePath = join(directory, "links.sqlite");
+  let currentTime = 1_000;
+  const app = createApp({
+    databasePath,
+    rateLimitMax: 2,
+    rateLimitWindowMs: 5_000,
+    now: () => currentTime,
+  });
+  const server = await startServer(app);
+
+  try {
+    for (const code of ["one", "two"]) {
+      const response = await postJson(server.baseUrl, "/links", {
+        url: "https://example.com/limited",
+        code,
+      });
+      assert.equal(response.status, 201);
+    }
+
+    const rejected = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/rejected",
+      code: "three",
+    });
+    assert.equal(rejected.status, 429);
+    assert.equal(typeof (await rejected.json()).error, "string");
+    assert.match(rejected.headers.get("retry-after"), /^\d+$/);
+    assert.ok(Number(rejected.headers.get("retry-after")) >= 1);
+    assert.equal((await fetch(`${server.baseUrl}/links/three`)).status, 404);
+
+    currentTime += 5_000;
+    const afterWindow = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/accepted",
+      code: "three",
+    });
+    assert.equal(afterWindow.status, 201);
+  } finally {
+    await server.close();
+    app.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rate limiting does not apply to redirects or stats", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp("/tmp/link-shortener-rate-limit-routes-");
+  const databasePath = join(directory, "links.sqlite");
+  const app = createApp({ databasePath, rateLimitMax: 1, rateLimitWindowMs: 60_000 });
+  const server = await startServer(app);
+
+  try {
+    await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/unlimited-routes",
+      code: "open",
+    });
+    const rejected = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/another",
+      code: "closed",
+    });
+    assert.equal(rejected.status, 429);
+
+    const redirect = await fetch(`${server.baseUrl}/open`, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    const stats = await fetch(`${server.baseUrl}/links/open/stats`);
+    assert.equal(stats.status, 200);
+  } finally {
+    await server.close();
+    app.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
