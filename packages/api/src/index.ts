@@ -1,8 +1,9 @@
 import express, { type Express } from "express";
-import { Ledger } from "../../core/src/ledger";
 import { AuthStore } from "./auth-store";
 import { openDatabase } from "./db";
 import { createAuthRouter, requireAuth, type AuthenticatedRequest } from "./auth-routes";
+import { LedgerService } from "./ledger-service";
+import { LedgerStore } from "./ledger-store";
 import type { DatabaseSync } from "node:sqlite";
 
 export interface ApiOptions {
@@ -14,7 +15,7 @@ export function createApp(options: ApiOptions = {}): Express {
   const db = options.db ?? openDatabase(process.env.DATABASE_PATH ?? "ledger.sqlite");
   const authStore = new AuthStore(db);
   const sessionSecret = options.sessionSecret ?? process.env.SESSION_SECRET ?? developmentSessionSecret();
-  const ledgers = new Map<string, Ledger>();
+  const ledgerStore = new LedgerStore(db);
   const app = express();
 
   app.disable("x-powered-by");
@@ -22,12 +23,7 @@ export function createApp(options: ApiOptions = {}): Express {
   app.use("/auth", createAuthRouter(authStore, sessionSecret));
 
   const authenticated = requireAuth(authStore, sessionSecret);
-  const ledgerFor = (req: AuthenticatedRequest) => {
-    const userId = req.user!.id;
-    let ledger = ledgers.get(userId);
-    if (!ledger) { ledger = new Ledger(); ledgers.set(userId, ledger); }
-    return ledger;
-  };
+  const ledgerFor = (req: AuthenticatedRequest) => new LedgerService(ledgerStore, req.user!.id);
   app.get("/accounts", authenticated, (req: AuthenticatedRequest, res) => res.json(ledgerFor(req).listAccounts()));
   app.post("/accounts", authenticated, (req: AuthenticatedRequest, res) => {
     try { return res.status(201).json(ledgerFor(req).addAccount(req.body)); }
