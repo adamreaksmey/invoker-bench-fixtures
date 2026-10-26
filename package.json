@@ -1,0 +1,12 @@
+{
+  "name": "csvreport",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.5" },
+  "bin": { "csvreport": "bin/csvreport.js" },
+  "scripts": {
+    "test": "node --test test/",
+    "build": "node scripts/build.mjs"
+  }
+}
