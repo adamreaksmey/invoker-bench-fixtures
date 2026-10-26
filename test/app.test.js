@@ -72,6 +72,21 @@ test("parses comma-separated tags and falls back to heading then slug", async ()
   }
 });
 
+test("front matter does not override title precedence when title is blank", async () => {
+  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+  try {
+    const response = await putPage(server.baseUrl, "heading-fallback", "---\ntitle:   \ntags: [ Ops, ops, Deploy ]\n---\n# Heading title\n\nBody text.\n");
+    assert.deepEqual(await response.json(), {
+      slug: "heading-fallback",
+      title: "Heading title",
+      tags: ["deploy", "ops"],
+      body: "# Heading title\n\nBody text.\n",
+    });
+  } finally {
+    await server.close();
+  }
+});
+
 test("search finds pages containing the query", async () => {
   const server = await startServer(createApp({ pagesDir: makePagesDir() }));
   try {
@@ -98,6 +113,30 @@ test("synchronizes the index across app restarts and supports tags", async () =>
     assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/OPS`)).json(), [{ slug: "ops", title: "Operations" }]);
     assert.equal((await fetch(`${server.baseUrl}/pages/welcome`)).status, 404);
     assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=restart%20%22service%22`)).json()).results.map(({ slug }) => slug), ["ops"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("create, update, and delete keep search and tags indexes current before responding", async () => {
+  const pagesDir = makePagesDir();
+  const server = await startServer(createApp({ pagesDir, indexPath: join(mkdtempSync(join(tmpdir(), "wiki-index-")), "index.sqlite") }));
+  try {
+    const created = await putPage(server.baseUrl, "draft", "---\ntitle: First draft\ntags: alpha\n---\nA rareword appears here.\n");
+    assert.equal(created.status, 201);
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=rareword`)).json()).results.map(({ slug }) => slug), ["draft"]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/alpha`)).json(), [{ slug: "draft", title: "First draft" }]);
+
+    const updated = await putPage(server.baseUrl, "draft", "---\ntitle: Second draft\ntags: beta\n---\nA differentword appears here.\n");
+    assert.equal(updated.status, 200);
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=rareword`)).json()).results, []);
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=differentword`)).json()).results.map(({ slug }) => slug), ["draft"]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/alpha`)).json(), []);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/beta`)).json(), [{ slug: "draft", title: "Second draft" }]);
+
+    assert.equal((await fetch(`${server.baseUrl}/pages/draft`, { method: "DELETE" })).status, 204);
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=differentword`)).json()).results, []);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/beta`)).json(), []);
   } finally {
     await server.close();
   }
