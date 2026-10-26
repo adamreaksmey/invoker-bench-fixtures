@@ -68,6 +68,41 @@ test("prints usage without an input file", () => {
   assert.match(result.stderr, /^usage:/);
 });
 
+test("rejects unknown short and long flags", () => {
+  const input = writeCsv("name\nAda\n");
+  for (const flag of ["-v", "--verbose"]) {
+    const result = runCli([input, flag]);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /^error: unknown option /);
+    assert.equal(result.stdout, "");
+  }
+});
+
+test("reports a missing input file as an I/O error", () => {
+  const result = runCli([join(mkdtempSync(join(tmpdir(), "csvreport-")), "missing.csv")]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^error:/);
+  assert.equal(result.stdout, "");
+});
+
+test("reports an unreadable input path as an I/O error", () => {
+  const directory = mkdtempSync(join(tmpdir(), "csvreport-"));
+  const result = runCli([directory]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^error:/);
+  assert.equal(result.stdout, "");
+});
+
+test("rejects options with missing values", () => {
+  const input = writeCsv("name\nAda\n");
+  for (const option of ["--format", "--out", "--schema"]) {
+    const result = runCli([input, option]);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /^usage:/);
+    assert.equal(result.stdout, "");
+  }
+});
+
 test("validates schema rules and converts numeric columns", () => {
   const result = runCli([
     writeCsv("region,amount,qty,day,paid\nnorth,12.5,2,2024-02-29,true\n"),

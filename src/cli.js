@@ -28,7 +28,7 @@ function parseArguments(argv) {
     }
     else if (argument === "--count") options.count = true;
     else if (argument === "--skip-invalid") options.skipInvalid = true;
-    else if (argument.startsWith("--")) return { error: `error: unknown option ${argument}\n` };
+    else if (argument.startsWith("-")) return { error: `error: unknown option ${argument}\n` };
     else if (options.input === undefined) options.input = argument;
     else return { error: "usage: only one input file may be specified\n" };
   }
