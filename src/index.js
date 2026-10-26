@@ -38,7 +38,9 @@ function runMigrations(database) {
 }
 
 function searchTerms(query) {
-  return [...new Set(query.match(/[\p{L}\p{N}]+/gu) ?? [])];
+  // FTS5 syntax is deliberately not exposed to callers. Treat punctuation,
+  // quotes, and operators as separators and search the resulting words.
+  return [...new Set((query.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) => term.toLocaleLowerCase()))];
 }
 
 function makeSnippet(body, terms) {
@@ -101,7 +103,7 @@ export class PageIndex {
   search(query) {
     const terms = searchTerms(query);
     if (!terms.length) return [];
-    const match = terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ");
+    const match = terms.map((term) => `"${term}"`).join(" AND ");
     const rows = this.database.prepare("SELECT slug, title, body, -bm25(pages_fts, 5.0, 1.0) AS score FROM pages_fts WHERE pages_fts MATCH ? ORDER BY bm25(pages_fts, 5.0, 1.0), slug LIMIT 20").all(match);
     return rows.map(({ slug, title, body, score }) => ({ slug, title, snippet: makeSnippet(body, terms), score: Number(score) }));
   }

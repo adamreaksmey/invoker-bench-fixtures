@@ -119,3 +119,24 @@ test("search ranks title matches, highlights body matches, and validates q", asy
     await server.close();
   }
 });
+
+test("search uses case-insensitive AND terms, ignores punctuation, and caps results", async () => {
+  const pagesDir = makePagesDir();
+  writeFileSync(join(pagesDir, "both-terms.md"), "# Deploy Service\nDeploy the service safely.\n");
+  writeFileSync(join(pagesDir, "one-term.md"), "# Deploy\nOnly one term appears here.\n");
+  for (let i = 0; i < 21; i += 1) {
+    writeFileSync(join(pagesDir, `extra-${String(i).padStart(2, "0")}.md`), `# Extra ${i}\nDeploy service ${i}.\n`);
+  }
+  const server = await startServer(createApp({ pagesDir, indexPath: join(mkdtempSync(join(tmpdir(), "wiki-index-")), "index.sqlite") }));
+  try {
+    const response = await (await fetch(`${server.baseUrl}/search?q=DEPLOY%20%22SERVICE%22!!!`)).json();
+    assert.equal(response.query, 'DEPLOY "SERVICE"!!!');
+    assert.equal(response.results.length, 20);
+    assert.equal(response.results.some(({ slug }) => slug === "one-term"), false);
+    assert.equal(response.results[0].slug, "both-terms");
+    assert.match(response.results[0].snippet, /\*\*Deploy\*\*/);
+    assert.match(response.results[0].snippet, /\*\*service\*\*/i);
+  } finally {
+    await server.close();
+  }
+});
