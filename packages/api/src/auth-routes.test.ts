@@ -3,6 +3,9 @@ import request from "supertest";
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase } from "./db";
 import { createApp } from "./index";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("authentication and ledger API", () => {
   let db: DatabaseSync | undefined;
@@ -55,5 +58,28 @@ describe("authentication and ledger API", () => {
     await request(server).get("/accounts").set("Cookie", aliceCookie).expect(200, [
       { id: "checking", name: "Checking" }, { id: "savings", name: "Savings" },
     ]);
+  });
+
+  it("returns ledger data after the API is reopened on the same database", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "personal-ledger-"));
+    const filename = join(directory, "ledger.sqlite");
+    try {
+      const firstDb = openDatabase(filename);
+      const firstApp = createApp({ db: firstDb, sessionSecret: "test-session-secret" });
+      const registered = await request(firstApp).post("/auth/register").send({ username: "restart", password: "secret" }).expect(201);
+      const cookie = registered.headers["set-cookie"][0].split(";")[0];
+      await request(firstApp).post("/accounts").set("Cookie", cookie).send({ id: "cash", name: "Cash" }).expect(201);
+      await request(firstApp).post("/transactions").set("Cookie", cookie)
+        .send({ id: "deposit", accountId: "cash", amountCents: 12550 }).expect(201);
+      firstDb.close();
+
+      const secondDb = openDatabase(filename);
+      const secondApp = createApp({ db: secondDb, sessionSecret: "test-session-secret" });
+      expect(await request(secondApp).get("/accounts").set("Cookie", cookie).expect(200)).toEqual(expect.objectContaining({ body: [{ id: "cash", name: "Cash" }] }));
+      await request(secondApp).get("/accounts/cash/balance").set("Cookie", cookie).expect(200, { balanceCents: 12550 });
+      secondDb.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

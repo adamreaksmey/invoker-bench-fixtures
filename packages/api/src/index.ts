@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
-import { Ledger } from "../../core/src/ledger";
 import { AuthStore } from "./auth-store";
-import { openDatabase } from "./db";
+import { openDatabase, runMigrations } from "./db";
+import { LedgerService } from "./ledger-service";
 import { createAuthRouter, requireAuth, type AuthenticatedRequest } from "./auth-routes";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -12,9 +12,13 @@ export interface ApiOptions {
 
 export function createApp(options: ApiOptions = {}): Express {
   const db = options.db ?? openDatabase(process.env.DATABASE_PATH ?? "ledger.sqlite");
+  if (options.db) {
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+  }
   const authStore = new AuthStore(db);
   const sessionSecret = options.sessionSecret ?? process.env.SESSION_SECRET ?? developmentSessionSecret();
-  const ledgers = new Map<string, Ledger>();
+  const ledger = new LedgerService(db);
   const app = express();
 
   app.disable("x-powered-by");
@@ -22,27 +26,22 @@ export function createApp(options: ApiOptions = {}): Express {
   app.use("/auth", createAuthRouter(authStore, sessionSecret));
 
   const authenticated = requireAuth(authStore, sessionSecret);
-  const ledgerFor = (req: AuthenticatedRequest) => {
-    const userId = req.user!.id;
-    let ledger = ledgers.get(userId);
-    if (!ledger) { ledger = new Ledger(); ledgers.set(userId, ledger); }
-    return ledger;
-  };
-  app.get("/accounts", authenticated, (req: AuthenticatedRequest, res) => res.json(ledgerFor(req).listAccounts()));
+  const userId = (req: AuthenticatedRequest) => req.user!.id;
+  app.get("/accounts", authenticated, (req: AuthenticatedRequest, res) => res.json(ledger.listAccounts(userId(req))));
   app.post("/accounts", authenticated, (req: AuthenticatedRequest, res) => {
-    try { return res.status(201).json(ledgerFor(req).addAccount(req.body)); }
+    try { return res.status(201).json(ledger.addAccount(userId(req), req.body)); }
     catch (error) { return ledgerError(res, error); }
   });
   app.get("/transactions", authenticated, (req: AuthenticatedRequest, res) => {
-    try { return res.json(ledgerFor(req).listTransactions(req.query.accountId as string | undefined)); }
+    try { return res.json(ledger.listTransactions(userId(req), req.query.accountId as string | undefined)); }
     catch (error) { return ledgerError(res, error); }
   });
   app.post("/transactions", authenticated, (req: AuthenticatedRequest, res) => {
-    try { return res.status(201).json(ledgerFor(req).addTransaction(req.body)); }
+    try { return res.status(201).json(ledger.addTransaction(userId(req), req.body)); }
     catch (error) { return ledgerError(res, error); }
   });
   app.get("/accounts/:accountId/balance", authenticated, (req: AuthenticatedRequest, res) => {
-    try { return res.json({ balanceCents: ledgerFor(req).getBalance(req.params.accountId) }); }
+    try { return res.json({ balanceCents: ledger.getBalance(userId(req), req.params.accountId) }); }
     catch (error) { return ledgerError(res, error); }
   });
 
