@@ -1,16 +1,16 @@
-import { readdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import {
+  parseFrontMatter,
+  resolveTags,
+  resolveTitle,
+} from "./front-matter.js";
 
 export const SLUG_PATTERN = /^[a-z0-9-]+$/;
 const PAGE_EXTENSION = ".md";
 
 export function pagePath(pagesDir, slug) {
   return join(pagesDir, `${slug}${PAGE_EXTENSION}`);
-}
-
-export function titleFor(slug, markdown) {
-  const heading = markdown.split("\n").find((line) => line.startsWith("# "));
-  return heading ? heading.slice(2).trim() : slug;
 }
 
 export function listSlugs(pagesDir) {
@@ -21,11 +21,30 @@ export function listSlugs(pagesDir) {
     .sort();
 }
 
+export function parsePageMarkdown(slug, markdown) {
+  const { attributes, body } = parseFrontMatter(markdown);
+  return {
+    slug,
+    title: resolveTitle(slug, attributes, body),
+    tags: resolveTags(attributes),
+    body,
+  };
+}
+
 export function readPage(pagesDir, slug) {
   const path = pagePath(pagesDir, slug);
   if (!existsSync(path)) return undefined;
-  const body = readFileSync(path, "utf8");
-  return { slug, title: titleFor(slug, body), body };
+  const markdown = readFileSync(path, "utf8");
+  return parsePageMarkdown(slug, markdown);
+}
+
+export function readPageWithMeta(pagesDir, slug) {
+  const path = pagePath(pagesDir, slug);
+  if (!existsSync(path)) return undefined;
+  const markdown = readFileSync(path, "utf8");
+  const page = parsePageMarkdown(slug, markdown);
+  const mtimeMs = Math.trunc(statSync(path).mtimeMs);
+  return { ...page, mtimeMs, markdown };
 }
 
 export function writePage(pagesDir, slug, body) {
