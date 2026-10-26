@@ -53,8 +53,7 @@ function parseArguments(argv) {
 function applyFlag(options, argument, argv, index) {
   const valueKey = VALUE_FLAGS.get(argument);
   if (valueKey !== undefined) {
-    options[valueKey] = argv[index + 1];
-    return 1;
+    return applyValueFlag(options, argument, valueKey, argv[index + 1]);
   }
   const booleanKey = BOOLEAN_FLAGS.get(argument);
   if (booleanKey !== undefined) {
@@ -69,6 +68,15 @@ function applyFlag(options, argument, argv, index) {
   return 0;
 }
 
+function applyValueFlag(options, argument, valueKey, value) {
+  if (value === undefined || value.startsWith(FLAG_PREFIX)) {
+    options.error = `${ERROR_IO_PREFIX}missing value for ${argument}\n`;
+    return undefined;
+  }
+  options[valueKey] = value;
+  return 1;
+}
+
 export function run(argv, io) {
   const options = parseArguments(argv);
   const usageExit = validateOptions(options, io);
@@ -81,14 +89,17 @@ export function run(argv, io) {
     return EXIT_USAGE;
   }
 
-  const rows = applySchema(document, options, io);
-  if (rows === undefined) {
-    return EXIT_VALIDATION;
+  const schemaResult = applySchema(document, options, io);
+  if (schemaResult.exitCode !== undefined) {
+    return schemaResult.exitCode;
   }
 
   const report = options.groupBy
-    ? groupRows(rows, options.groupBy, { sum: options.sum, count: options.count })
-    : rows;
+    ? groupRows(schemaResult.rows, options.groupBy, {
+        sum: options.sum,
+        count: options.count,
+      })
+    : schemaResult.rows;
   return writeOutput(formatRows(report, options.format), options.out, io);
 }
 
@@ -133,31 +144,44 @@ function writeOutput(text, outPath, io) {
 
 function applySchema(document, options, io) {
   if (!options.schema) {
-    return document.rows;
+    return { rows: document.rows };
   }
 
-  const schema = JSON.parse(readFileSync(options.schema, "utf8"));
-  const result = validateRows(document.rows, document.header, schema);
+  const schema = readSchemaFile(options.schema, io);
+  if (schema === undefined) {
+    return { exitCode: EXIT_USAGE };
+  }
 
+  const result = validateRows(document.rows, document.header, schema);
   if (result.missingColumn !== undefined) {
     io.stderr(`${ERROR_MISSING_COLUMN_PREFIX}${result.missingColumn}\n`);
-    return undefined;
+    return { exitCode: EXIT_VALIDATION };
   }
 
   for (const error of result.errors) {
     io.stderr(`${error}\n`);
   }
+  return resolveValidatedRows(result, options.skipInvalid, io);
+}
 
+function resolveValidatedRows(result, skipInvalid, io) {
   if (result.invalidRowCount === 0) {
-    return result.rows;
+    return { rows: result.rows };
   }
-
-  if (!options.skipInvalid) {
-    return undefined;
+  if (!skipInvalid) {
+    return { exitCode: EXIT_VALIDATION };
   }
-
   io.stderr(
     `${SKIPPED_INVALID_PREFIX}${result.invalidRowCount}${SKIPPED_INVALID_SUFFIX}\n`
   );
-  return result.rows;
+  return { rows: result.rows };
+}
+
+function readSchemaFile(schemaPath, io) {
+  try {
+    return JSON.parse(readFileSync(schemaPath, "utf8"));
+  } catch (error) {
+    io.stderr(`${ERROR_IO_PREFIX}${error.message}\n`);
+    return undefined;
+  }
 }

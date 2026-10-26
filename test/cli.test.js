@@ -75,6 +75,45 @@ test("prints usage without an input file", () => {
   assert.match(result.stderr, /^usage:/);
 });
 
+test("rejects unknown flags with exit 1", () => {
+  const result = runCli([writeCsv("name,qty\napple,2\n"), "--unknown"]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^error: unknown flag --unknown\n$/);
+});
+
+test("rejects missing input file with exit 1", () => {
+  const result = runCli([join(tmpdir(), "csvreport-missing-input.csv")]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^error:/);
+});
+
+test("rejects invalid --format with exit 1", () => {
+  const result = runCli([writeCsv("name,qty\napple,2\n"), "--format", "xml"]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^error:/);
+});
+
+test("rejects missing flag values with exit 1", () => {
+  const result = runCli([writeCsv("name,qty\napple,2\n"), "--format"]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^error: missing value for --format\n$/);
+});
+
+test("rejects unreadable schema file with exit 1", () => {
+  const result = runCli([
+    writeCsv("name,qty\napple,2\n"),
+    "--schema",
+    join(tmpdir(), "csvreport-missing-schema.json"),
+  ]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^error:/);
+});
+
 test("exits 2 with empty stdout when schema validation fails", () => {
   const schemaPath = writeSchema({
     amount: { type: "number", required: true, min: 0 },
