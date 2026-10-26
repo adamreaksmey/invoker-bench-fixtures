@@ -37,6 +37,27 @@ test("groups and sums a column", () => {
   assert.match(result.stdout, /south\s+2/);
 });
 
+test("groups with count only and sorts groups by key", () => {
+  const result = runCli([writeCsv("region\nzulu\nalpha\nzulu\n"), "--group-by", "region", "--count"]);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /^region\s+count\nalpha\s+1\nzulu\s+2\n$/);
+});
+
+test("groups with sum and count in the contract column order and rounds sums", () => {
+  const result = runCli([
+    writeCsv("region,amount\nb,0.105\na,1.234\na,2.345\n"),
+    "--group-by", "region", "--sum", "amount", "--count",
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /^region\s+sum_amount\s+count\na\s+3\.58\s+2\nb\s+0\.11\s+1\n$/);
+});
+
+test("does not aggregate rows without group-by", () => {
+  const result = runCli([writeCsv("region,amount\nb,1\na,2\n"), "--sum", "amount", "--count"]);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /^region\s+amount\nb\s+1\na\s+2\n$/);
+});
+
 test("prints usage without an input file", () => {
   const result = runCli([]);
   assert.equal(result.exitCode, 1);

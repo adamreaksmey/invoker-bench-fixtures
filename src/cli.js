@@ -3,16 +3,17 @@ import { parseCsvDocument } from "./parse.js";
 import { formatTable, groupRows } from "./report.js";
 import { validateRows } from "./schema.js";
 
-const USAGE = "usage: csvreport <input.csv> [--group-by <column> --sum <column>]\n";
+const USAGE = "usage: csvreport <input.csv> [--group-by <column> [--sum <column>] [--count]]\n";
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
 
 function parseArguments(argv) {
-  const options = { input: undefined, groupBy: undefined, sum: undefined, schema: undefined, skipInvalid: false };
+  const options = { input: undefined, groupBy: undefined, sum: undefined, count: false, schema: undefined, skipInvalid: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--group-by") options.groupBy = argv[++index];
     else if (argument === "--sum") options.sum = argv[++index];
+    else if (argument === "--count") options.count = true;
     else if (argument === "--schema") options.schema = argv[++index];
     else if (argument === "--skip-invalid") options.skipInvalid = true;
     else options.input = argument;
@@ -49,7 +50,7 @@ export function run(argv, io) {
       io.stderr(`skipped ${count} invalid row(s)\n`);
     }
   }
-  const report = options.groupBy ? groupRows(rows, options.groupBy, options.sum) : rows;
+  const report = options.groupBy ? groupRows(rows, options.groupBy, options.sum, options.count) : rows;
   io.stdout(formatTable(report));
   return EXIT_OK;
 }

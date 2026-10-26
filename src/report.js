@@ -1,10 +1,24 @@
-export function groupRows(rows, groupColumn, sumColumn) {
-  const totals = new Map();
+export function groupRows(rows, groupColumn, sumColumn, includeCount = false) {
+  const groups = new Map();
   for (const row of rows) {
     const key = row[groupColumn];
-    totals.set(key, (totals.get(key) ?? 0) + Number(row[sumColumn]));
+    const group = groups.get(key) ?? { sum: 0, count: 0 };
+    if (sumColumn !== undefined) group.sum += Number(row[sumColumn]);
+    group.count += 1;
+    groups.set(key, group);
   }
-  return [...totals].map(([key, total]) => ({ [groupColumn]: key, [`sum_${sumColumn}`]: total }));
+  return [...groups.entries()]
+    .sort(([left], [right]) => {
+      const leftKey = String(left);
+      const rightKey = String(right);
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    })
+    .map(([key, group]) => {
+      const result = { [groupColumn]: key };
+      if (sumColumn !== undefined) result[`sum_${sumColumn}`] = Math.round((group.sum + Number.EPSILON) * 100) / 100;
+      if (includeCount) result.count = group.count;
+      return result;
+    });
 }
 
 export function formatTable(rows) {
