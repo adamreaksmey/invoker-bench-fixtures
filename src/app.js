@@ -10,6 +10,16 @@ function generateCode() {
   return Array.from(bytes, (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
 }
 
+function isHttpUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.host.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function migrate(database) {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -68,9 +78,19 @@ export function createApp(options = {}) {
   app.use(express.json({ limit: "16kb" }));
 
   app.post("/links", (req, res) => {
-    const url = req.body?.url;
-    if (typeof url !== "string" || url.length === 0) return res.status(400).json({ error: "url is required" });
-    const code = typeof req.body.code === "string" ? req.body.code : generateCode();
+    const body = req.body ?? {};
+    const url = body.url;
+    if (!isHttpUrl(url)) return res.status(400).json({ error: "url must be an absolute http or https URL" });
+
+    const hasCustomCode = Object.hasOwn(body, "code");
+    if (hasCustomCode && (typeof body.code !== "string" || !/^[A-Za-z0-9_-]{3,32}$/.test(body.code))) {
+      return res.status(400).json({ error: "code must contain 3-32 letters, numbers, underscores, or hyphens" });
+    }
+
+    const code = hasCustomCode ? body.code : generateCode();
+    if (hasCustomCode && findLink.get(code)) {
+      return res.status(409).json({ error: "custom code already exists" });
+    }
     const createdAt = new Date().toISOString();
     insertLink.run(code, url, createdAt);
     return res.status(201).json({ code, url, shortUrl: `/${code}` });
