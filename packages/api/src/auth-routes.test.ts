@@ -99,30 +99,40 @@ describe("authentication and ledger API", () => {
   it("survives a new app instance using the same database", async () => {
     const directory = mkdtempSync(join(tmpdir(), "ledger-api-"));
     const filename = join(directory, "ledger.sqlite");
-    let firstDb: DatabaseSync | undefined;
-    let secondDb: DatabaseSync | undefined;
+    const previousDatabasePath = process.env.DATABASE_PATH;
     try {
-      firstDb = openDatabase(filename);
-      const firstApp = createApp({ db: firstDb, sessionSecret: "test-session-secret" });
+      process.env.DATABASE_PATH = filename;
+      const firstApp = createApp({ sessionSecret: "test-session-secret" });
       const registered = await request(firstApp).post("/auth/register")
         .send({ username: "alice", password: "secret" }).expect(201);
       const cookie = registered.headers["set-cookie"][0].split(";")[0];
       await request(firstApp).post("/accounts").set("Cookie", cookie)
         .send({ id: "checking", name: "Checking" }).expect(201);
       await request(firstApp).post("/transactions").set("Cookie", cookie)
-        .send({ id: "deposit", accountId: "checking", amountCents: 12550 }).expect(201);
-      firstDb.close();
-      firstDb = undefined;
+        .send({ id: "deposit", accountId: "checking", amountCents: 12550, description: "Payday" }).expect(201);
+      await request(firstApp).post("/accounts").set("Cookie", cookie)
+        .send({ id: "savings", name: "Savings" }).expect(201);
+      await request(firstApp).post("/transactions").set("Cookie", cookie)
+        .send({ id: "transfer", accountId: "savings", amountCents: 5000 }).expect(201);
 
-      secondDb = openDatabase(filename);
-      const secondApp = createApp({ db: secondDb, sessionSecret: "test-session-secret" });
+      const secondApp = createApp({ sessionSecret: "test-session-secret" });
       await request(secondApp).get("/accounts").set("Cookie", cookie)
-        .expect(200, [{ id: "checking", name: "Checking" }]);
+        .expect(200, [
+          { id: "checking", name: "Checking" },
+          { id: "savings", name: "Savings" },
+        ]);
+      await request(secondApp).get("/transactions").set("Cookie", cookie)
+        .expect(200, [
+          { id: "deposit", accountId: "checking", amountCents: 12550, description: "Payday" },
+          { id: "transfer", accountId: "savings", amountCents: 5000 },
+        ]);
       await request(secondApp).get("/accounts/checking/balance").set("Cookie", cookie)
         .expect(200, { balanceCents: 12550 });
+      await request(secondApp).get("/accounts/savings/balance").set("Cookie", cookie)
+        .expect(200, { balanceCents: 5000 });
     } finally {
-      secondDb?.close();
-      firstDb?.close();
+      if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+      else process.env.DATABASE_PATH = previousDatabasePath;
       rmSync(directory, { recursive: true, force: true });
     }
   });
