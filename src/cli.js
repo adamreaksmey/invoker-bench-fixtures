@@ -4,7 +4,7 @@ import { formatTable, groupRows } from "./report.js";
 import { validateRows } from "./schema.js";
 
 const USAGE =
-  "usage: csvreport <input.csv> [--schema <file.json>] [--skip-invalid] [--group-by <column> --sum <column>]\n";
+  "usage: csvreport <input.csv> [--schema <file.json>] [--skip-invalid] [--group-by <column>] [--sum <column>] [--count]\n";
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
 const EXIT_VALIDATION = 2;
@@ -17,6 +17,7 @@ function parseArguments(argv) {
     input: undefined,
     groupBy: undefined,
     sum: undefined,
+    count: false,
     schema: undefined,
     skipInvalid: false,
   };
@@ -26,6 +27,8 @@ function parseArguments(argv) {
       options.groupBy = argv[++index];
     } else if (argument === "--sum") {
       options.sum = argv[++index];
+    } else if (argument === "--count") {
+      options.count = true;
     } else if (argument === "--schema") {
       options.schema = argv[++index];
     } else if (argument === "--skip-invalid") {
@@ -51,7 +54,7 @@ export function run(argv, io) {
   }
 
   const report = options.groupBy
-    ? groupRows(rows, options.groupBy, options.sum)
+    ? groupRows(rows, options.groupBy, { sum: options.sum, count: options.count })
     : rows;
   io.stdout(formatTable(report));
   return EXIT_OK;

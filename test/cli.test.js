@@ -53,6 +53,22 @@ test("groups and sums a column", () => {
   assert.match(result.stdout, /south\s+2/);
 });
 
+test("groups with sum and count in sorted order", () => {
+  const result = runCli([
+    writeCsv("region,amount\nzulu,1.115\nalpha,2\nzulu,1.115\n"),
+    "--group-by",
+    "region",
+    "--sum",
+    "amount",
+    "--count",
+  ]);
+  assert.equal(result.exitCode, 0);
+  const lines = result.stdout.trim().split("\n");
+  assert.match(lines[0], /region\s+sum_amount\s+count/);
+  assert.match(lines[1], /alpha\s+2\s+1/);
+  assert.match(lines[2], /zulu\s+2\.23\s+2/);
+});
+
 test("prints usage without an input file", () => {
   const result = runCli([]);
   assert.equal(result.exitCode, 1);
