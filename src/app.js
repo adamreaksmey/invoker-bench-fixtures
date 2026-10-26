@@ -44,7 +44,7 @@ export function createApp(options = {}) {
   const database = new DatabaseSync(databasePath);
   migrate(database);
   const getLink = database.prepare("SELECT code, url, created_at AS createdAt FROM links WHERE code = ?");
-  const saveLink = database.prepare("INSERT INTO links (code, url, created_at) VALUES (?, ?, ?) ON CONFLICT(code) DO UPDATE SET url = excluded.url, created_at = excluded.created_at");
+  const saveLink = database.prepare("INSERT INTO links (code, url, created_at) VALUES (?, ?, ?)");
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "16kb" }));
@@ -52,9 +52,29 @@ export function createApp(options = {}) {
   app.post("/links", (req, res) => {
     const url = req.body?.url;
     if (typeof url !== "string" || url.length === 0) return res.status(400).json({ error: "url is required" });
-    const code = typeof req.body.code === "string" ? req.body.code : generateCode();
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return res.status(400).json({ error: "url must be an absolute http or https URL" });
+    }
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return res.status(400).json({ error: "url must be an absolute http or https URL" });
+    }
+    const hasCustomCode = req.body != null && Object.hasOwn(req.body, "code");
+    if (hasCustomCode && (typeof req.body.code !== "string" || !/^[A-Za-z0-9_-]{3,32}$/.test(req.body.code))) {
+      return res.status(400).json({ error: "code must be 3 to 32 characters using letters, numbers, hyphens, or underscores" });
+    }
+    const code = hasCustomCode ? req.body.code : generateCode();
     const createdAt = new Date().toISOString();
-    saveLink.run(code, url, createdAt);
+    try {
+      saveLink.run(code, url, createdAt);
+    } catch (error) {
+      if (error.errcode === 1555 || error.errcode === 2067) {
+        return res.status(409).json({ error: "code already exists" });
+      }
+      throw error;
+    }
     return res.status(201).json({ code, url, shortUrl: `/${code}` });
   });
 
