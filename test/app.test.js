@@ -49,9 +49,14 @@ test("search finds pages containing the query (case-insensitive)", async () => {
     const response = await (await fetch(`${server.baseUrl}/search?q=start`)).json();
     assert.equal(response.query, "start");
     assert.deepEqual(response.results.map((result) => result.slug), ["welcome"]);
-    assert.equal(typeof response.results[0].score, "number");
-    assert.ok(response.results[0].snippet.includes("**"));
-    assert.match(response.results[0].snippet, /\*\*[^*]*[Ss]tart[^*]*\*\*/);
+    const [hit] = response.results;
+    assert.equal(hit.slug, "welcome");
+    assert.equal(hit.title, "Welcome");
+    assert.equal(typeof hit.score, "number");
+    assert.ok(hit.score > 0);
+    assert.equal(typeof hit.snippet, "string");
+    assert.ok(hit.snippet.includes("**"));
+    assert.match(hit.snippet, /\*\*[^*]*[Ss]tart[^*]*\*\*/);
   } finally {
     await server.close();
   }
@@ -169,6 +174,24 @@ test("parsePageContent accepts comma-form tags", () => {
   );
   assert.deepEqual(page.tags, ["deploy", "ops"]);
   assert.equal(page.body, "Body only.\n");
+});
+
+test("parsePageContent ignores unclosed front matter", () => {
+  const raw = "---\ntitle: Broken\ntags: [ops]\nNo closing delimiter.\n";
+  const page = parsePageContent("broken", raw);
+  assert.equal(page.title, "broken");
+  assert.deepEqual(page.tags, []);
+  assert.equal(page.body, raw);
+});
+
+test("parsePageContent uses front-matter title without a heading", () => {
+  const page = parsePageContent(
+    "plain",
+    "---\ntitle: Named page\ntags: []\n---\nJust prose.\n",
+  );
+  assert.equal(page.title, "Named page");
+  assert.deepEqual(page.tags, []);
+  assert.equal(page.body, "Just prose.\n");
 });
 
 test("GET /pages and GET /pages/:slug include tags; body excludes front matter", async () => {
@@ -319,6 +342,17 @@ test("schema version table and FTS5 content are persisted", () => {
   }
 });
 
+test("GET /tags returns [] when no pages are tagged", async () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  writeFileSync(join(pagesDir, "plain.md"), "# Plain\n\nNo tags.\n");
+  const server = await startServer(makeApp(pagesDir));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), []);
+  } finally {
+    await server.close();
+  }
+});
+
 test("GET /tags returns tag counts sorted by count desc then tag asc", async () => {
   const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
   writeFileSync(
@@ -342,6 +376,47 @@ test("GET /tags returns tag counts sorted by count desc then tag asc", async () 
       { tag: "deploy", count: 1 },
       { tag: "wiki", count: 1 },
     ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("PUT and DELETE keep tag endpoints in sync with the index", async () => {
+  const server = await startServer(makeApp());
+  try {
+    assert.equal(
+      (await putPage(
+        server.baseUrl,
+        "tagged",
+        "---\ntitle: Tagged\ntags: [ops]\n---\nBody.\n",
+      )).status,
+      201,
+    );
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), [
+      { tag: "ops", count: 1 },
+    ]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/ops`)).json(), [
+      { slug: "tagged", title: "Tagged" },
+    ]);
+
+    assert.equal(
+      (await putPage(server.baseUrl, "tagged", "# Untagged\n\nNo front matter.\n")).status,
+      200,
+    );
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), []);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/ops`)).json(), []);
+
+    assert.equal(
+      (await putPage(
+        server.baseUrl,
+        "tagged",
+        "---\ntitle: Again\ntags: [wiki]\n---\nBody.\n",
+      )).status,
+      200,
+    );
+    assert.equal((await fetch(`${server.baseUrl}/pages/tagged`, { method: "DELETE" })).status, 204);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), []);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/wiki`)).json(), []);
   } finally {
     await server.close();
   }
