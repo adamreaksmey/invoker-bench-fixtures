@@ -19,17 +19,40 @@ function migrate(database) {
   `);
 
   const applied = database.prepare("SELECT 1 FROM schema_migrations WHERE version = ?");
-  if (!applied.get(1)) {
-    database.exec("BEGIN");
-    try {
-      database.exec(`
+  const migrations = [
+    {
+      version: 1,
+      sql: `
         CREATE TABLE links (
           code TEXT PRIMARY KEY,
           url TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
+      `,
+    },
+    {
+      version: 2,
+      sql: `
+        CREATE TABLE clicks (
+          id INTEGER PRIMARY KEY,
+          code TEXT NOT NULL,
+          clicked_at TEXT NOT NULL,
+          referer TEXT,
+          FOREIGN KEY (code) REFERENCES links (code)
+        );
+        CREATE INDEX clicks_code_clicked_at ON clicks (code, clicked_at);
+      `,
+    },
+  ];
+
+  for (const migration of migrations) {
+    if (applied.get(migration.version)) continue;
+    database.exec("BEGIN");
+    try {
+      database.exec(migration.sql);
+      database.exec(`
         INSERT INTO schema_migrations (version, applied_at)
-        VALUES (1, CURRENT_TIMESTAMP);
+        VALUES (${migration.version}, CURRENT_TIMESTAMP);
       `);
       database.exec("COMMIT");
     } catch (error) {
@@ -45,6 +68,21 @@ export function createApp(options = {}) {
   migrate(database);
   const getLink = database.prepare("SELECT code, url, created_at AS createdAt FROM links WHERE code = ?");
   const saveLink = database.prepare("INSERT INTO links (code, url, created_at) VALUES (?, ?, ?)");
+  const saveClick = database.prepare("INSERT INTO clicks (code, clicked_at, referer) VALUES (?, ?, ?)");
+  const getClickStats = database.prepare(`
+    SELECT
+      COUNT(*) AS totalClicks,
+      MAX(clicked_at) AS lastClickedAt
+    FROM clicks
+    WHERE code = ?
+  `);
+  const getClicksByDay = database.prepare(`
+    SELECT strftime('%Y-%m-%d', clicked_at) AS day, COUNT(*) AS clicks
+    FROM clicks
+    WHERE code = ?
+    GROUP BY day
+    ORDER BY day
+  `);
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "16kb" }));
@@ -84,9 +122,27 @@ export function createApp(options = {}) {
     return res.json({ code: link.code, url: link.url, createdAt: link.createdAt });
   });
 
+  app.get("/links/:code/stats", (req, res) => {
+    const link = getLink.get(req.params.code);
+    if (!link) return res.status(404).json({ error: "link not found" });
+
+    const summary = getClickStats.get(req.params.code);
+    const clicksByDay = Object.fromEntries(
+      getClicksByDay.all(req.params.code).map((row) => [row.day, Number(row.clicks)]),
+    );
+    return res.json({
+      code: link.code,
+      url: link.url,
+      totalClicks: Number(summary.totalClicks),
+      lastClickedAt: summary.lastClickedAt,
+      clicksByDay,
+    });
+  });
+
   app.get("/:code", (req, res) => {
     const link = getLink.get(req.params.code);
     if (!link) return res.status(404).json({ error: "link not found" });
+    saveClick.run(link.code, new Date(options.now?.() ?? Date.now()).toISOString(), req.get("referer") ?? null);
     return res.redirect(302, link.url);
   });
 

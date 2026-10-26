@@ -112,3 +112,80 @@ test("links persist when a new app instance opens the same database file", async
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("records redirect clicks and reports UTC click statistics", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "link-shortener-analytics-"));
+  const databasePath = join(directory, "links.sqlite");
+  let currentTime = Date.parse("2026-01-02T03:04:05.000Z");
+  const app = createApp({ databasePath, now: () => currentTime });
+  const server = await startServer(app);
+  try {
+    await postJson(server.baseUrl, "/links", { url: "https://example.com/analytics", code: "stats" });
+
+    const empty = await fetch(`${server.baseUrl}/links/stats/stats`);
+    assert.deepEqual(await empty.json(), {
+      code: "stats",
+      url: "https://example.com/analytics",
+      totalClicks: 0,
+      lastClickedAt: null,
+      clicksByDay: {},
+    });
+
+    const first = await fetch(`${server.baseUrl}/stats`, {
+      redirect: "manual",
+      headers: { referer: "https://example.com/source" },
+    });
+    assert.equal(first.status, 302);
+
+    currentTime = Date.parse("2026-01-02T23:59:59.999Z");
+    const second = await fetch(`${server.baseUrl}/stats`, { redirect: "manual" });
+    assert.equal(second.status, 302);
+
+    currentTime = Date.parse("2026-01-03T00:00:00.000Z");
+    const third = await fetch(`${server.baseUrl}/stats`, { redirect: "manual" });
+    assert.equal(third.status, 302);
+
+    const stats = await fetch(`${server.baseUrl}/links/stats/stats`);
+    assert.equal(stats.status, 200);
+    assert.deepEqual(await stats.json(), {
+      code: "stats",
+      url: "https://example.com/analytics",
+      totalClicks: 3,
+      lastClickedAt: "2026-01-03T00:00:00.000Z",
+      clicksByDay: { "2026-01-02": 2, "2026-01-03": 1 },
+    });
+    assert.equal((await fetch(`${server.baseUrl}/links/stats/stats`)).status, 200);
+  } finally {
+    await server.close();
+    app.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("click analytics persist across app restarts and unknown stats return 404", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "link-shortener-analytics-restart-"));
+  const databasePath = join(directory, "links.sqlite");
+  const firstApp = createApp({ databasePath, now: () => Date.parse("2026-02-03T12:00:00.000Z") });
+  const firstServer = await startServer(firstApp);
+  try {
+    await postJson(firstServer.baseUrl, "/links", { url: "https://example.com/restart", code: "restart" });
+    const redirect = await fetch(`${firstServer.baseUrl}/restart`, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+  } finally {
+    await firstServer.close();
+    firstApp.locals.close();
+  }
+
+  const secondApp = createApp({ databasePath });
+  const secondServer = await startServer(secondApp);
+  try {
+    const stats = await fetch(`${secondServer.baseUrl}/links/restart/stats`);
+    assert.equal(stats.status, 200);
+    assert.equal((await stats.json()).totalClicks, 1);
+    assert.equal((await fetch(`${secondServer.baseUrl}/links/missing/stats`)).status, 404);
+  } finally {
+    await secondServer.close();
+    secondApp.locals.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
