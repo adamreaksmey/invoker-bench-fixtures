@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app.js";
@@ -77,6 +77,44 @@ test("search finds pages containing the query", async () => {
   try {
     const response = await (await fetch(`${server.baseUrl}/search?q=Start`)).json();
     assert.deepEqual(response.results.map((result) => result.slug), ["welcome"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("synchronizes the index across app restarts and supports tags", async () => {
+  const pagesDir = makePagesDir();
+  const indexPath = join(mkdtempSync(join(tmpdir(), "wiki-index-")), "index.sqlite");
+  const first = createApp({ pagesDir, indexPath });
+  first.locals.close();
+  rmSync(join(pagesDir, "welcome.md"));
+  writeFileSync(join(pagesDir, "ops.md"), "---\ntitle: Operations\ntags: Ops, runbook\n---\n# Runbook\nRestart the service safely.\n");
+  const server = await startServer(createApp({ pagesDir, indexPath }));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), [
+      { tag: "ops", count: 1 },
+      { tag: "runbook", count: 1 },
+    ]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/OPS`)).json(), [{ slug: "ops", title: "Operations" }]);
+    assert.equal((await fetch(`${server.baseUrl}/pages/welcome`)).status, 404);
+    assert.deepEqual((await (await fetch(`${server.baseUrl}/search?q=restart%20%22service%22`)).json()).results.map(({ slug }) => slug), ["ops"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("search ranks title matches, highlights body matches, and validates q", async () => {
+  const pagesDir = makePagesDir();
+  writeFileSync(join(pagesDir, "title-match.md"), "# Deploy guide\nA general note.\n");
+  writeFileSync(join(pagesDir, "body-match.md"), "# Other\nDeploy the service with care.\n");
+  const server = await startServer(createApp({ pagesDir, indexPath: join(mkdtempSync(join(tmpdir(), "wiki-index-")), "index.sqlite") }));
+  try {
+    const response = await (await fetch(`${server.baseUrl}/search?q=deploy`)).json();
+    assert.equal(response.results[0].slug, "title-match");
+    assert.match(response.results[1].snippet, /\*\*Deploy\*\*/);
+    assert.equal(typeof response.results[0].score, "number");
+    assert.equal((await fetch(`${server.baseUrl}/search`)).status, 400);
+    assert.equal((await fetch(`${server.baseUrl}/search?q=%22!!!`)).status, 200);
   } finally {
     await server.close();
   }
