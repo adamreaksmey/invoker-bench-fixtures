@@ -41,11 +41,12 @@ function Ledger() {
 
   async function addAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
     setBusy(true);
     try {
       const created = await api<Account>("/accounts", { id: crypto.randomUUID(), name: data.get("name") });
-      event.currentTarget.reset();
+      form.reset();
       setAccountId(created.id);
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not create account"); }
@@ -54,12 +55,13 @@ function Ledger() {
 
   async function addTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
     setBusy(true);
     try {
       const amount = Math.round(Number(data.get("amount")) * 100);
       await api("/transactions", { id: crypto.randomUUID(), accountId, amountCents: data.get("type") === "expense" ? -amount : amount, description: data.get("description") });
-      event.currentTarget.reset();
+      form.reset();
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save transaction"); }
     finally { setBusy(false); }
