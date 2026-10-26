@@ -79,9 +79,16 @@ function parseRecords(text) {
 }
 
 export function parseCsv(text) {
+  return parseCsvWithHeader(text).rows;
+}
+
+export function parseCsvWithHeader(text) {
   const input = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const [header = [], ...data] = parseRecords(input);
-  return data.map((cells) => Object.fromEntries(
-    header.map((column, index) => [column, cells[index] ?? ""]),
-  ));
+  return {
+    header,
+    rows: data.map((cells) => Object.fromEntries(
+      header.map((column, index) => [column, cells[index] ?? ""]),
+    )),
+  };
 }
