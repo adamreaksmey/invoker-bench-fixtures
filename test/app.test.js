@@ -69,3 +69,74 @@ test("link created by one app instance is readable by another on the same databa
     await readerServer.close();
   }
 });
+
+test("rejects non-absolute and non-http(s) urls with 400", async () => {
+  const server = await startServer(createTestApp());
+  try {
+    for (const url of ["example.com/path", "/relative", "ftp://example.com", "javascript:alert(1)"]) {
+      const response = await postJson(server.baseUrl, "/links", { url });
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.equal(typeof body.error, "string");
+      assert.ok(body.error.length > 0);
+    }
+
+    const httpsOk = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/ok",
+    });
+    assert.equal(httpsOk.status, 201);
+
+    const httpOk = await postJson(server.baseUrl, "/links", {
+      url: "http://example.com/ok",
+    });
+    assert.equal(httpOk.status, 201);
+  } finally {
+    await server.close();
+  }
+});
+
+test("rejects invalid custom codes with 400", async () => {
+  const server = await startServer(createTestApp());
+  try {
+    for (const code of ["ab", "a".repeat(33), "bad code", "has.dot", "slash/y"]) {
+      const response = await postJson(server.baseUrl, "/links", {
+        url: "https://example.com",
+        code,
+      });
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.equal(typeof body.error, "string");
+      assert.ok(body.error.length > 0);
+    }
+
+    const valid = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com",
+      code: "ok_Code-123",
+    });
+    assert.equal(valid.status, 201);
+  } finally {
+    await server.close();
+  }
+});
+
+test("rejects duplicate custom codes with 409", async () => {
+  const server = await startServer(createTestApp());
+  try {
+    const first = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/one",
+      code: "taken",
+    });
+    assert.equal(first.status, 201);
+
+    const duplicate = await postJson(server.baseUrl, "/links", {
+      url: "https://example.com/two",
+      code: "taken",
+    });
+    assert.equal(duplicate.status, 409);
+    const body = await duplicate.json();
+    assert.equal(typeof body.error, "string");
+    assert.ok(body.error.length > 0);
+  } finally {
+    await server.close();
+  }
+});

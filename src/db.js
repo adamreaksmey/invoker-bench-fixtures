@@ -63,7 +63,7 @@ export function openDatabase(databasePath) {
 export function insertLink(database, link) {
   database
     .prepare(
-      `INSERT OR REPLACE INTO ${LINKS_TABLE} (code, url, created_at) VALUES (?, ?, ?)`,
+      `INSERT INTO ${LINKS_TABLE} (code, url, created_at) VALUES (?, ?, ?)`,
     )
     .run(link.code, link.url, link.createdAt);
 }
