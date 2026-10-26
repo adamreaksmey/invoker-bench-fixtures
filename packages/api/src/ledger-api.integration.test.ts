@@ -10,12 +10,15 @@ import { openDatabase } from "./db";
 describe("ledger API", () => {
   let db: DatabaseSync | undefined;
   let directory: string | undefined;
+  const originalDatabasePath = process.env.DATABASE_PATH;
 
   afterEach(() => {
     db?.close();
     db = undefined;
     if (directory) rmSync(directory, { recursive: true, force: true });
     directory = undefined;
+    if (originalDatabasePath === undefined) delete process.env.DATABASE_PATH;
+    else process.env.DATABASE_PATH = originalDatabasePath;
   });
 
   function createTestApp() {
@@ -97,5 +100,44 @@ describe("ledger API", () => {
     await request(restartedApp).get("/accounts/checking/balance").set("Cookie", aliceSession)
       .expect(200, { balanceCents: 12550 });
     await request(restartedApp).get("/accounts").set("Cookie", bobSession).expect(200, []);
+  });
+
+  it("preserves accounts, transactions, and balances across createApp restarts", async () => {
+    directory = mkdtempSync(join(tmpdir(), "personal-ledger-api-restart-"));
+    process.env.DATABASE_PATH = join(directory, "ledger.sqlite");
+
+    const firstApp = createApp({ sessionSecret: "test-session-secret" });
+    const registration = await request(firstApp)
+      .post("/auth/register")
+      .send({ username: "alice", password: "secret" })
+      .expect(201);
+    const session = cookie(registration);
+
+    await request(firstApp)
+      .post("/accounts")
+      .set("Cookie", session)
+      .send({ id: "checking", name: "Checking" })
+      .expect(201, { id: "checking", name: "Checking" });
+    await request(firstApp)
+      .post("/transactions")
+      .set("Cookie", session)
+      .send({ id: "payday", accountId: "checking", amountCents: 12550, description: "Pay day" })
+      .expect(201, { id: "payday", accountId: "checking", amountCents: 12550, description: "Pay day" });
+    await request(firstApp)
+      .post("/transactions")
+      .set("Cookie", session)
+      .send({ id: "coffee", accountId: "checking", amountCents: -350 })
+      .expect(201, { id: "coffee", accountId: "checking", amountCents: -350 });
+
+    const restartedApp = createApp({ sessionSecret: "test-session-secret" });
+    await request(restartedApp).get("/accounts").set("Cookie", session).expect(200, [
+      { id: "checking", name: "Checking" },
+    ]);
+    await request(restartedApp).get("/transactions").set("Cookie", session).expect(200, [
+      { id: "payday", accountId: "checking", amountCents: 12550, description: "Pay day" },
+      { id: "coffee", accountId: "checking", amountCents: -350 },
+    ]);
+    await request(restartedApp).get("/accounts/checking/balance").set("Cookie", session)
+      .expect(200, { balanceCents: 12200 });
   });
 });
