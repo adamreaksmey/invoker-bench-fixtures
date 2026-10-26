@@ -1,4 +1,8 @@
 export function parseCsv(text) {
+  return parseCsvDocument(text).rows;
+}
+
+export function parseCsvDocument(text) {
   const input = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const records = [];
   let record = [];
@@ -53,7 +57,8 @@ export function parseCsv(text) {
   if (record.length > 0 || fieldStarted || field.length > 0) finishRecord();
 
   const [header = [], ...dataRecords] = records;
-  return dataRecords.map((cells) => Object.fromEntries(
+  const rows = dataRecords.map((cells) => Object.fromEntries(
     header.map((column, index) => [column, cells[index] ?? ""]),
   ));
+  return { header, rows };
 }
