@@ -1,16 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app.js";
 import { parsePageContent, normalizeTags } from "../src/pages.js";
-import { startServer } from "./helpers.js";
+import { openWikiIndex, getIndexedPage, listIndexedSlugs, getSchemaVersion } from "../src/wiki-index.js";
+import { startServer, makeIndexPath } from "./helpers.js";
 
 function makePagesDir() {
   const dir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
   writeFileSync(join(dir, "welcome.md"), "# Welcome\n\nStart here.\n");
   return dir;
+}
+
+function makeApp(pagesDir = makePagesDir()) {
+  return createApp({ pagesDir, indexPath: makeIndexPath() });
 }
 
 function putPage(baseUrl, slug, body) {
@@ -22,7 +27,7 @@ function putPage(baseUrl, slug, body) {
 }
 
 test("lists, reads, creates, updates, and deletes pages", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+  const server = await startServer(makeApp());
   try {
     assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [
       { slug: "welcome", title: "Welcome", tags: [] },
@@ -39,7 +44,7 @@ test("lists, reads, creates, updates, and deletes pages", async () => {
 });
 
 test("search finds pages containing the query", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+  const server = await startServer(makeApp());
   try {
     const response = await (await fetch(`${server.baseUrl}/search?q=Start`)).json();
     assert.deepEqual(response.results.map((result) => result.slug), ["welcome"]);
@@ -91,7 +96,7 @@ test("GET /pages and GET /pages/:slug include tags; body excludes front matter",
     join(pagesDir, "deploy.md"),
     "---\ntitle: Deploy guide\ntags: [ops, Deploy, ops]\n---\n\nShip it.\n",
   );
-  const server = await startServer(createApp({ pagesDir }));
+  const server = await startServer(makeApp(pagesDir));
   try {
     assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [
       { slug: "deploy", title: "Deploy guide", tags: ["deploy", "ops"] },
@@ -107,7 +112,7 @@ test("GET /pages and GET /pages/:slug include tags; body excludes front matter",
 });
 
 test("PUT returns page with parsed front matter tags and title", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+  const server = await startServer(makeApp());
   try {
     const response = await putPage(
       server.baseUrl,
@@ -123,5 +128,112 @@ test("PUT returns page with parsed front matter tags and title", async () => {
     });
   } finally {
     await server.close();
+  }
+});
+
+test("createApp runs migrations and indexes existing pages on startup", async () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  const indexPath = makeIndexPath();
+  writeFileSync(
+    join(pagesDir, "alpha.md"),
+    "---\ntitle: Alpha\ntags: [one, Two]\n---\nAlpha body.\n",
+  );
+  writeFileSync(join(pagesDir, "beta.md"), "# Beta\n\nBeta body.\n");
+
+  const app = createApp({ pagesDir, indexPath });
+  try {
+    assert.equal(app.locals.wikiIndex.schemaVersion(), 1);
+    assert.deepEqual(app.locals.wikiIndex.listSlugs(), ["alpha", "beta"]);
+    assert.deepEqual(app.locals.wikiIndex.getPage("alpha"), {
+      slug: "alpha",
+      title: "Alpha",
+      body: "Alpha body.\n",
+      tags: ["one", "two"],
+      mtimeMs: app.locals.wikiIndex.getPage("alpha").mtimeMs,
+    });
+    assert.deepEqual(app.locals.wikiIndex.getPage("beta").tags, []);
+    assert.equal(app.locals.wikiIndex.getPage("beta").title, "Beta");
+  } finally {
+    app.locals.close();
+  }
+});
+
+test("startup sync reflects added, changed, and removed pages", async () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  const indexPath = makeIndexPath();
+  writeFileSync(join(pagesDir, "keep.md"), "# Keep\n\nOriginal.\n");
+  writeFileSync(join(pagesDir, "gone.md"), "# Gone\n\nRemove me.\n");
+
+  const first = createApp({ pagesDir, indexPath });
+  assert.deepEqual(first.locals.wikiIndex.listSlugs(), ["gone", "keep"]);
+  first.locals.close();
+
+  writeFileSync(join(pagesDir, "keep.md"), "# Keep\n\nChanged body.\n");
+  writeFileSync(join(pagesDir, "new.md"), "# New\n\nFresh.\n");
+  rmSync(join(pagesDir, "gone.md"));
+
+  const second = createApp({ pagesDir, indexPath });
+  try {
+    assert.deepEqual(second.locals.wikiIndex.listSlugs(), ["keep", "new"]);
+    assert.equal(second.locals.wikiIndex.getPage("keep").body, "# Keep\n\nChanged body.\n");
+    assert.equal(second.locals.wikiIndex.getPage("new").title, "New");
+    assert.equal(second.locals.wikiIndex.getPage("gone"), undefined);
+  } finally {
+    second.locals.close();
+  }
+});
+
+test("PUT and DELETE update the index before responding", async () => {
+  const pagesDir = makePagesDir();
+  const indexPath = makeIndexPath();
+  const app = createApp({ pagesDir, indexPath });
+  const server = await startServer(app);
+  try {
+    const created = await putPage(
+      server.baseUrl,
+      "ops",
+      "---\ntitle: Ops\ntags: [prod]\n---\nRunbook.\n",
+    );
+    assert.equal(created.status, 201);
+    assert.deepEqual(app.locals.wikiIndex.getPage("ops"), {
+      slug: "ops",
+      title: "Ops",
+      body: "Runbook.\n",
+      tags: ["prod"],
+      mtimeMs: app.locals.wikiIndex.getPage("ops").mtimeMs,
+    });
+
+    assert.equal((await putPage(server.baseUrl, "ops", "# Ops\n\nUpdated.\n")).status, 200);
+    assert.equal(app.locals.wikiIndex.getPage("ops").title, "Ops");
+    assert.equal(app.locals.wikiIndex.getPage("ops").body, "# Ops\n\nUpdated.\n");
+    assert.deepEqual(app.locals.wikiIndex.getPage("ops").tags, []);
+
+    assert.equal((await fetch(`${server.baseUrl}/pages/ops`, { method: "DELETE" })).status, 204);
+    assert.equal(app.locals.wikiIndex.getPage("ops"), undefined);
+    assert.ok(!app.locals.wikiIndex.listSlugs().includes("ops"));
+  } finally {
+    await server.close();
+  }
+});
+
+test("schema version table and FTS5 content are persisted", () => {
+  const pagesDir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
+  const indexPath = makeIndexPath();
+  writeFileSync(join(pagesDir, "fts.md"), "# FTS Title\n\nUniqueNeedle in body.\n");
+  const app = createApp({ pagesDir, indexPath });
+  app.locals.close();
+
+  const db = openWikiIndex(indexPath);
+  try {
+    assert.equal(getSchemaVersion(db), 1);
+    assert.deepEqual(listIndexedSlugs(db), ["fts"]);
+    const indexed = getIndexedPage(db, "fts");
+    assert.equal(indexed.title, "FTS Title");
+    const ftsHits = db
+      .prepare("SELECT slug FROM pages_fts WHERE pages_fts MATCH ?")
+      .all("UniqueNeedle");
+    assert.deepEqual(ftsHits.map((row) => row.slug), ["fts"]);
+  } finally {
+    db.close();
   }
 });

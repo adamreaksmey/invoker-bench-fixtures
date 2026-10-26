@@ -1,5 +1,6 @@
 import express from "express";
 import { SLUG_PATTERN, deletePage, listSlugs, readPage, writePage } from "./pages.js";
+import { DEFAULT_INDEX_PATH, createWikiIndex } from "./wiki-index.js";
 
 function requireValidSlug(req, res, next) {
   if (!SLUG_PATTERN.test(req.params.slug)) return res.status(400).json({ error: "invalid slug" });
@@ -9,9 +10,17 @@ function requireValidSlug(req, res, next) {
 export function createApp(options = {}) {
   const pagesDir = options.pagesDir;
   if (!pagesDir) throw new TypeError("pagesDir is required");
+  const indexPath = options.indexPath ?? DEFAULT_INDEX_PATH;
+  const wikiIndex = createWikiIndex(indexPath);
+  wikiIndex.sync(pagesDir);
+
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
+  app.locals.wikiIndex = wikiIndex;
+  app.locals.close = () => {
+    wikiIndex.close();
+  };
 
   app.get("/pages", (_req, res) => {
     res.json(listSlugs(pagesDir).map((slug) => {
@@ -30,11 +39,13 @@ export function createApp(options = {}) {
     const body = req.body?.body;
     if (typeof body !== "string") return res.status(400).json({ error: "body must be a string" });
     const existed = writePage(pagesDir, req.params.slug, body);
+    wikiIndex.upsertFromDisk(pagesDir, req.params.slug);
     return res.status(existed ? 200 : 201).json(readPage(pagesDir, req.params.slug));
   });
 
   app.delete("/pages/:slug", requireValidSlug, (req, res) => {
     if (!deletePage(pagesDir, req.params.slug)) return res.status(404).json({ error: "page not found" });
+    wikiIndex.remove(req.params.slug);
     return res.status(204).end();
   });
 
@@ -47,6 +58,5 @@ export function createApp(options = {}) {
     res.json({ query, results });
   });
 
-  app.locals.close = () => {};
   return app;
 }
