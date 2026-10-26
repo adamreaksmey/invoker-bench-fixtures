@@ -103,6 +103,28 @@ test("synchronizes the index across app restarts and supports tags", async () =>
   }
 });
 
+test("tag endpoints count and sort tags, and return pages case-insensitively by slug", async () => {
+  const pagesDir = makePagesDir();
+  writeFileSync(join(pagesDir, "zebra.md"), "---\ntitle: Zebra page\ntags: Alpha, shared\n---\n# Zebra\n");
+  writeFileSync(join(pagesDir, "apple.md"), "---\ntitle: Apple page\ntags: shared, Beta\n---\n# Apple\n");
+  writeFileSync(join(pagesDir, "middle.md"), "---\ntitle: Middle page\ntags: alpha, shared\n---\n# Middle\n");
+  const server = await startServer(createApp({ pagesDir, indexPath: join(mkdtempSync(join(tmpdir(), "wiki-index-")), "index.sqlite") }));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags`)).json(), [
+      { tag: "shared", count: 3 },
+      { tag: "alpha", count: 2 },
+      { tag: "beta", count: 1 },
+    ]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/AlPhA`)).json(), [
+      { slug: "middle", title: "Middle page" },
+      { slug: "zebra", title: "Zebra page" },
+    ]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/tags/missing`)).json(), []);
+  } finally {
+    await server.close();
+  }
+});
+
 test("search ranks title matches, highlights body matches, and validates q", async () => {
   const pagesDir = makePagesDir();
   writeFileSync(join(pagesDir, "title-match.md"), "# Deploy guide\nA general note.\n");
