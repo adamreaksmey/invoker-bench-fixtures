@@ -137,6 +137,32 @@ test("converts integer and number columns before aggregation", () => {
   assert.match(result.stdout, /4/);
 });
 
+test("counts rows per group with --count", () => {
+  const result = runCli([
+    writeCsv("region,amount\nnorth,1\nsouth,2\nnorth,3\n"),
+    "--group-by",
+    "region",
+    "--count",
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /north\s+2/);
+  assert.match(result.stdout, /south\s+1/);
+});
+
+test("sums and counts rows per group", () => {
+  const result = runCli([
+    writeCsv("region,amount\nnorth,1\nsouth,2\nnorth,3\n"),
+    "--group-by",
+    "region",
+    "--sum",
+    "amount",
+    "--count",
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /north\s+4\s+2/);
+  assert.match(result.stdout, /south\s+2\s+1/);
+});
+
 test("errors reading a missing schema file", () => {
   const result = runCli([writeCsv("region\nnorth\n"), "--schema", "/does/not/exist.json"]);
   assert.equal(result.exitCode, 1);

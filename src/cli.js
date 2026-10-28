@@ -3,17 +3,18 @@ import { parseCsvWithHeader } from "./parse.js";
 import { formatTable, groupRows } from "./report.js";
 import { loadSchema, findMissingSchemaColumns, validateRows } from "./schema.js";
 
-const USAGE = "usage: csvreport <input.csv> [--schema <file.json>] [--skip-invalid] [--group-by <column> --sum <column>]\n";
+const USAGE = "usage: csvreport <input.csv> [--schema <file.json>] [--skip-invalid] [--group-by <column> [--sum <column>] [--count]]\n";
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
 const EXIT_VALIDATION = 2;
 
 function parseArguments(argv) {
-  const options = { input: undefined, groupBy: undefined, sum: undefined, schema: undefined, skipInvalid: false };
+  const options = { input: undefined, groupBy: undefined, sum: undefined, count: false, schema: undefined, skipInvalid: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--group-by") options.groupBy = argv[++index];
     else if (argument === "--sum") options.sum = argv[++index];
+    else if (argument === "--count") options.count = true;
     else if (argument === "--schema") options.schema = argv[++index];
     else if (argument === "--skip-invalid") options.skipInvalid = true;
     else options.input = argument;
@@ -47,8 +48,8 @@ function reportValidationErrors(io, errors) {
   for (const error of errors) io.stderr(`${error}\n`);
 }
 
-function buildReport(rows, groupBy, sumColumn) {
-  return groupBy ? groupRows(rows, groupBy, sumColumn) : rows;
+function buildReport(rows, groupBy, sumColumn, includeCount) {
+  return groupBy ? groupRows(rows, groupBy, { sumColumn, includeCount }) : rows;
 }
 
 export function run(argv, io) {
@@ -81,10 +82,10 @@ export function run(argv, io) {
       io.stderr(`skipped ${validation.droppedCount} invalid row(s)\n`);
     }
 
-    io.stdout(formatTable(buildReport(validation.validRows, options.groupBy, options.sum)));
+    io.stdout(formatTable(buildReport(validation.validRows, options.groupBy, options.sum, options.count)));
     return EXIT_OK;
   }
 
-  io.stdout(formatTable(buildReport(rows, options.groupBy, options.sum)));
+  io.stdout(formatTable(buildReport(rows, options.groupBy, options.sum, options.count)));
   return EXIT_OK;
 }
