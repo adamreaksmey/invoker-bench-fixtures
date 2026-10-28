@@ -5,11 +5,16 @@ const CARRIAGE_RETURN = "\r";
 const LINE_FEED = "\n";
 
 export function parseCsv(text) {
+  return parseCsvWithHeader(text).rows;
+}
+
+export function parseCsvWithHeader(text) {
   const input = text.startsWith(BOM) ? text.slice(1) : text;
   const records = parseRecords(input);
-  if (records.length === 0) return [];
+  if (records.length === 0) return { header: [], rows: [] };
   const [header, ...dataRows] = records;
-  return dataRows.map((row) => Object.fromEntries(header.map((column, index) => [column, row[index] ?? ""])));
+  const rows = dataRows.map((row) => Object.fromEntries(header.map((column, index) => [column, row[index] ?? ""])));
+  return { header, rows };
 }
 
 function parseRecords(text) {
