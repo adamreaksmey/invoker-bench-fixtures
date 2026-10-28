@@ -16,9 +16,20 @@ const MISSING_CELL_VALUE = "";
  * the field, and an unterminated quote consumes the remaining input.
  */
 export function parseCsv(text) {
+  return parseCsvTable(text).rows;
+}
+
+/**
+ * Parses CSV text into its header record and data rows. Exposing the header
+ * lets callers check schema columns even when the file has no data rows.
+ */
+export function parseCsvTable(text) {
   const [headerRecord, ...dataRecords] = tokenizeRecords(stripBom(text));
-  if (headerRecord === undefined) return [];
-  return dataRecords.map((record) => toRow(headerRecord.fields, record.fields));
+  if (headerRecord === undefined) return { header: [], rows: [] };
+  return {
+    header: headerRecord.fields,
+    rows: dataRecords.map((record) => toRow(headerRecord.fields, record.fields)),
+  };
 }
 
 function stripBom(text) {
