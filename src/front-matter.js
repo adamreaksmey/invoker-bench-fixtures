@@ -48,15 +48,17 @@ export function splitFrontMatter(source) {
   };
 }
 
+/** Trims and lowercases one tag; the single source of truth for how tags are stored. */
+export function normalizeTag(rawTag) {
+  return typeof rawTag === "string" ? rawTag.trim().toLowerCase() : "";
+}
+
 /** Accepts both `[a, b]` and `a, b`, returning trimmed, lowercased, sorted, unique tags. */
 export function normalizeTags(rawValue) {
   if (typeof rawValue !== "string") return NO_TAGS;
   const listMatch = BRACKETED_LIST_PATTERN.exec(rawValue.trim());
   const listSource = listMatch ? listMatch[1] : rawValue;
-  const tags = listSource
-    .split(TAG_SEPARATOR)
-    .map((tag) => tag.trim().toLowerCase())
-    .filter((tag) => tag.length > 0);
+  const tags = listSource.split(TAG_SEPARATOR).map(normalizeTag).filter((tag) => tag.length > 0);
   return [...new Set(tags)].sort();
 }
 

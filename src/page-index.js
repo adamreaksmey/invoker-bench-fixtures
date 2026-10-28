@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { parsePage } from "./front-matter.js";
+import { normalizeTag, parsePage } from "./front-matter.js";
 import { listSlugs, pagePath } from "./pages.js";
 import { buildMatchExpression, parseSearchTerms, rankSearchResults } from "./search.js";
 import { runInTransaction, runMigrations } from "./sqlite-migrations.js";
@@ -13,6 +13,21 @@ const SEARCH_TABLE = "pages_fts";
 const FTS_TOKENIZER = "unicode61 remove_diacritics 2";
 
 const SEARCH_CANDIDATES_SQL = `SELECT slug, title, body FROM ${SEARCH_TABLE} WHERE ${SEARCH_TABLE} MATCH ?`;
+
+const TAG_COUNTS_SQL = `
+  SELECT tag, COUNT(*) AS count
+  FROM page_tags
+  GROUP BY tag
+  ORDER BY count DESC, tag ASC
+`;
+
+const PAGES_BY_TAG_SQL = `
+  SELECT pages.slug AS slug, pages.title AS title
+  FROM page_tags
+  JOIN pages ON pages.slug = page_tags.slug
+  WHERE page_tags.tag = ?
+  ORDER BY pages.slug ASC
+`;
 
 const CREATE_PAGE_INDEX_SQL = `
   CREATE TABLE pages (
@@ -58,6 +73,8 @@ function prepareStatements(database) {
     deleteSearchRow: database.prepare(`DELETE FROM ${SEARCH_TABLE} WHERE slug = ?`),
     insertSearchRow: database.prepare(`INSERT INTO ${SEARCH_TABLE} (slug, title, body) VALUES (?, ?, ?)`),
     selectSearchCandidates: database.prepare(SEARCH_CANDIDATES_SQL),
+    selectTagCounts: database.prepare(TAG_COUNTS_SQL),
+    selectPagesByTag: database.prepare(PAGES_BY_TAG_SQL),
   };
 }
 
@@ -136,10 +153,24 @@ export function createPageIndex({ pagesDir, indexPath }) {
     return rankSearchResults(candidates, terms);
   }
 
+  /** Every tag with its page count, most used first and alphabetical on ties. */
+  function listTagCounts() {
+    return statements.selectTagCounts.all().map(({ tag, count }) => ({ tag, count }));
+  }
+
+  /** Pages carrying `rawTag`, by slug; the tag is normalized the same way as stored tags. */
+  function listPagesByTag(rawTag) {
+    const tag = normalizeTag(rawTag);
+    if (tag.length === 0) return [];
+    return statements.selectPagesByTag.all(tag).map(({ slug, title }) => ({ slug, title }));
+  }
+
   return {
     replacePage,
     removePage,
     search,
+    listTagCounts,
+    listPagesByTag,
     syncWithDirectory,
     close: () => database.close(),
   };

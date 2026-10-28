@@ -56,6 +56,14 @@ export function createApp(options = {}) {
     return res.json({ query, results: index.search(query) });
   });
 
+  app.get("/tags", (_req, res) => {
+    res.json(index.listTagCounts());
+  });
+
+  app.get("/tags/:tag", (req, res) => {
+    res.json(index.listPagesByTag(req.params.tag));
+  });
+
   app.locals.close = () => index.close();
   return app;
 }

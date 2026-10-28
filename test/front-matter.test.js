@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeTags, parsePage, splitFrontMatter } from "../src/front-matter.js";
+import { normalizeTag, normalizeTags, parsePage, splitFrontMatter } from "../src/front-matter.js";
 
 test("front matter supplies title and normalized tags", () => {
   const source = ["---", "title: Deploy guide", "tags: [ops, Deploy, ops]", "---", "# Heading", "", "Body."].join("\n");
@@ -33,6 +33,13 @@ test("tags accept the comma-separated form", () => {
 
 test("tags are trimmed, lowercased, de-duplicated, and sorted", () => {
   assert.deepEqual(normalizeTags("[  Ops , deploy,OPS, , docs ]"), ["deploy", "docs", "ops"]);
+});
+
+test("a single tag is normalized the same way as tags inside a page", () => {
+  assert.equal(normalizeTag("  Ops "), "ops");
+  assert.equal(normalizeTag("Deploy"), "deploy");
+  assert.equal(normalizeTag("   "), "");
+  assert.equal(normalizeTag(undefined), "");
 });
 
 test("a page without front matter has no tags and an untouched body", () => {
