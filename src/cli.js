@@ -3,7 +3,7 @@ import { parseCsvTable } from "./parse.js";
 import { findMissingSchemaColumns, readSchema, validateRows } from "./schema.js";
 import { formatTable, groupRows } from "./report.js";
 
-const USAGE = "usage: csvreport <input.csv> [--schema <file.json>] [--skip-invalid]\n";
+const USAGE = "usage: csvreport <input.csv> [--schema <file.json>] [--skip-invalid] [--group-by <col> [--sum <col>] [--count]]\n";
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
 const EXIT_VALIDATION = 2;
@@ -12,21 +12,27 @@ const MISSING_COLUMN_LABEL = "missing column ";
 const SKIPPED_LABEL = "skipped ";
 const SKIPPED_SUFFIX = " invalid row(s)\n";
 
-const OPTION_HANDLERS = new Map([
+/** Options that consume the following argument as their value. */
+const VALUE_OPTIONS = new Map([
   ["--group-by", (options, value) => { options.groupBy = value; }],
   ["--sum", (options, value) => { options.sum = value; }],
   ["--schema", (options, value) => { options.schema = value; }],
+]);
+
+/** Flags that take no value. */
+const FLAG_OPTIONS = new Map([
+  ["--count", (options) => { options.count = true; }],
   ["--skip-invalid", (options) => { options.skipInvalid = true; }],
 ]);
 
 function parseArguments(argv) {
-  const options = { input: undefined, groupBy: undefined, sum: undefined, schema: undefined, skipInvalid: false };
+  const options = { input: undefined, groupBy: undefined, sum: undefined, schema: undefined, count: false, skipInvalid: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    const handler = OPTION_HANDLERS.get(argument);
-    if (handler === undefined) options.input = argument;
-    else if (argument === "--skip-invalid") handler(options);
-    else handler(options, argv[++index]);
+    const valueHandler = VALUE_OPTIONS.get(argument);
+    if (valueHandler !== undefined) valueHandler(options, argv[++index]);
+    else if (FLAG_OPTIONS.has(argument)) FLAG_OPTIONS.get(argument)(options);
+    else options.input = argument;
   }
   return options;
 }
@@ -87,7 +93,8 @@ function validateTable(table, options, schemaColumns) {
 }
 
 function aggregate(rows, options) {
-  return options.groupBy ? groupRows(rows, options.groupBy, options.sum) : rows;
+  if (options.groupBy === undefined) return rows;
+  return groupRows(rows, { groupBy: options.groupBy, sumColumn: options.sum, count: options.count });
 }
 
 function renderCellError(cellError) {
