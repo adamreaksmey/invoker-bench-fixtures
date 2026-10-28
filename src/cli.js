@@ -4,7 +4,9 @@ import { findMissingSchemaColumns, readSchema, validateRows } from "./schema.js"
 import { groupRows } from "./report.js";
 import { DEFAULT_OUTPUT_FORMAT, formatRows, isSupportedOutputFormat } from "./output.js";
 
-const USAGE = "usage: csvreport <input.csv> [--schema <file.json>] [--skip-invalid] [--group-by <col> [--sum <col>] [--count]] [--format table|csv|json] [--out <path>]\n";
+const LINE_ENDING = "\n";
+const USAGE_PREFIX = "usage: ";
+const USAGE = `${USAGE_PREFIX}csvreport <input.csv> [--schema <file.json>] [--skip-invalid] [--group-by <col> [--sum <col>] [--count]] [--format table|csv|json] [--out <path>]${LINE_ENDING}`;
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
 const EXIT_VALIDATION = 2;
@@ -13,6 +15,10 @@ const MISSING_COLUMN_LABEL = "missing column ";
 const SKIPPED_LABEL = "skipped ";
 const SKIPPED_SUFFIX = " invalid row(s)\n";
 const UNSUPPORTED_FORMAT_PREFIX = "unsupported --format ";
+const UNKNOWN_OPTION_LABEL = "unknown option ";
+const MISSING_VALUE_LABEL = "missing value for ";
+const UNEXPECTED_ARGUMENT_LABEL = "unexpected argument ";
+const OPTION_PREFIX = "-";
 
 /** Options that consume the following argument as their value. */
 const VALUE_OPTIONS = new Map([
@@ -47,21 +53,42 @@ function parseArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const valueHandler = VALUE_OPTIONS.get(argument);
-    if (valueHandler !== undefined) valueHandler(options, argv[++index]);
-    else if (FLAG_OPTIONS.has(argument)) FLAG_OPTIONS.get(argument)(options);
-    else options.input = argument;
+    if (valueHandler !== undefined) {
+      const value = argv[index + 1];
+      if (!isOptionValue(value)) return { error: `${ERROR_PREFIX}${MISSING_VALUE_LABEL}${argument}${LINE_ENDING}` };
+      valueHandler(options, value);
+      index += 1;
+      continue;
+    }
+    if (FLAG_OPTIONS.has(argument)) {
+      FLAG_OPTIONS.get(argument)(options);
+      continue;
+    }
+    if (argument.startsWith(OPTION_PREFIX)) return { error: `${ERROR_PREFIX}${UNKNOWN_OPTION_LABEL}${argument}${LINE_ENDING}` };
+    if (options.input !== undefined) return { error: `${ERROR_PREFIX}${UNEXPECTED_ARGUMENT_LABEL}${argument}${LINE_ENDING}` };
+    options.input = argument;
   }
-  return options;
+  return { options };
+}
+
+/** A value is present when it exists and does not look like another option. */
+function isOptionValue(candidate) {
+  return candidate !== undefined && !candidate.startsWith(OPTION_PREFIX);
 }
 
 export function run(argv, io) {
-  const options = parseArguments(argv);
+  const parsedArguments = parseArguments(argv);
+  if (parsedArguments.error) {
+    io.stderr(parsedArguments.error);
+    return EXIT_USAGE;
+  }
+  const options = parsedArguments.options;
   if (!options.input) {
     io.stderr(USAGE);
     return EXIT_USAGE;
   }
   if (!isSupportedOutputFormat(options.format)) {
-    io.stderr(`${ERROR_PREFIX}${UNSUPPORTED_FORMAT_PREFIX}${options.format}\n`);
+    io.stderr(`${ERROR_PREFIX}${UNSUPPORTED_FORMAT_PREFIX}${options.format}${LINE_ENDING}`);
     return EXIT_USAGE;
   }
   const loadedSchema = loadSchema(options.schema, io);
