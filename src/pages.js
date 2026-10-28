@@ -1,16 +1,12 @@
 import { readdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { parsePage } from "./front-matter.js";
 
 export const SLUG_PATTERN = /^[a-z0-9-]+$/;
 const PAGE_EXTENSION = ".md";
 
 export function pagePath(pagesDir, slug) {
   return join(pagesDir, `${slug}${PAGE_EXTENSION}`);
-}
-
-export function titleFor(slug, markdown) {
-  const heading = markdown.split("\n").find((line) => line.startsWith("# "));
-  return heading ? heading.slice(2).trim() : slug;
 }
 
 export function listSlugs(pagesDir) {
@@ -21,11 +17,11 @@ export function listSlugs(pagesDir) {
     .sort();
 }
 
+/** Reads a page from disk, returning `{ slug, title, tags, body }` with front matter stripped. */
 export function readPage(pagesDir, slug) {
   const path = pagePath(pagesDir, slug);
   if (!existsSync(path)) return undefined;
-  const body = readFileSync(path, "utf8");
-  return { slug, title: titleFor(slug, body), body };
+  return { slug, ...parsePage(readFileSync(path, "utf8"), slug) };
 }
 
 export function writePage(pagesDir, slug, body) {

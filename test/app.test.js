@@ -6,9 +6,18 @@ import { join } from "node:path";
 import { createApp } from "../src/app.js";
 import { startServer } from "./helpers.js";
 
+const FRONT_MATTER_PAGE = ["---", "title: Deploy guide", "tags: [ops, Deploy, ops]", "---", "# Deploy guide", "", "Run the release pipeline."].join("\n");
+
 function makePagesDir() {
   const dir = mkdtempSync(join(tmpdir(), "wiki-pages-"));
   writeFileSync(join(dir, "welcome.md"), "# Welcome\n\nStart here.\n");
+  return dir;
+}
+
+function makePagesDirWithFrontMatter() {
+  const dir = makePagesDir();
+  writeFileSync(join(dir, "deploy-guide.md"), `${FRONT_MATTER_PAGE}\n`);
+  writeFileSync(join(dir, "on-call.md"), "# On-call handbook\n\nPage the secondary.\n");
   return dir;
 }
 
@@ -23,13 +32,52 @@ function putPage(baseUrl, slug, body) {
 test("lists, reads, creates, updates, and deletes pages", async () => {
   const server = await startServer(createApp({ pagesDir: makePagesDir() }));
   try {
-    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [{ slug: "welcome", title: "Welcome" }]);
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [{ slug: "welcome", title: "Welcome", tags: [] }]);
     assert.equal((await putPage(server.baseUrl, "notes", "# Notes\n")).status, 201);
     assert.equal((await putPage(server.baseUrl, "notes", "# Notes v2\n")).status, 200);
     assert.equal((await (await fetch(`${server.baseUrl}/pages/notes`)).json()).title, "Notes v2");
     assert.equal((await fetch(`${server.baseUrl}/pages/notes`, { method: "DELETE" })).status, 204);
     assert.equal((await fetch(`${server.baseUrl}/pages/notes`)).status, 404);
     assert.equal((await fetch(`${server.baseUrl}/pages/Bad_Slug`)).status, 400);
+  } finally {
+    await server.close();
+  }
+});
+
+test("GET /pages includes parsed tags and titles", async () => {
+  const server = await startServer(createApp({ pagesDir: makePagesDirWithFrontMatter() }));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [
+      { slug: "deploy-guide", title: "Deploy guide", tags: ["deploy", "ops"] },
+      { slug: "on-call", title: "On-call handbook", tags: [] },
+      { slug: "welcome", title: "Welcome", tags: [] },
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("GET /pages/:slug returns tags and a body without front matter", async () => {
+  const server = await startServer(createApp({ pagesDir: makePagesDirWithFrontMatter() }));
+  try {
+    assert.deepEqual(await (await fetch(`${server.baseUrl}/pages/deploy-guide`)).json(), {
+      slug: "deploy-guide",
+      title: "Deploy guide",
+      tags: ["deploy", "ops"],
+      body: "# Deploy guide\n\nRun the release pipeline.\n",
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("PUT parses front matter from the stored file", async () => {
+  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+  try {
+    const created = await (await putPage(server.baseUrl, "runbook", "---\ntags: Ops, runbook\n---\n# Runbook\n\nSteps.\n")).json();
+    assert.deepEqual(created, { slug: "runbook", title: "Runbook", tags: ["ops", "runbook"], body: "# Runbook\n\nSteps.\n" });
+    const listed = await (await fetch(`${server.baseUrl}/pages`)).json();
+    assert.deepEqual(listed.find((page) => page.slug === "runbook"), { slug: "runbook", title: "Runbook", tags: ["ops", "runbook"] });
   } finally {
     await server.close();
   }
