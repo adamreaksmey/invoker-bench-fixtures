@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export const SLUG_PATTERN = /^[a-z0-9-]+$/;
@@ -87,4 +87,10 @@ export function deletePage(pagesDir, slug) {
   if (!existsSync(path)) return false;
   rmSync(path);
   return true;
+}
+
+export function pageModifiedAt(pagesDir, slug) {
+  const path = pagePath(pagesDir, slug);
+  if (!existsSync(path)) return undefined;
+  return statSync(path).mtimeMs;
 }
