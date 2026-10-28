@@ -5,7 +5,13 @@ export async function startServer(app) {
   const { port } = server.address();
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () =>
+      new Promise((resolve) =>
+        server.close(() => {
+          app.locals.close();
+          resolve();
+        })
+      ),
   };
 }
 
