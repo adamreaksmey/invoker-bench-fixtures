@@ -1,23 +1,26 @@
 import express from "express";
-import { SLUG_PATTERN, deletePage, listSlugs, readPage, writePage } from "./pages.js";
+import { deletePage, readPage, writePage, SLUG_PATTERN } from "./pages.js";
+import { openIndex } from "./wikiIndex.js";
 
 function requireValidSlug(req, res, next) {
-  if (!SLUG_PATTERN.test(req.params.slug)) return res.status(400).json({ error: "invalid slug" });
+  if (!SLUG_PATTERN.test(req.params.slug)) {
+    return res.status(400).json({ error: "invalid slug" });
+  }
   return next();
 }
 
 export function createApp(options = {}) {
   const pagesDir = options.pagesDir;
   if (!pagesDir) throw new TypeError("pagesDir is required");
+  const indexPath = options.indexPath ?? process.env.WIKI_INDEX_PATH ?? "wiki-index.sqlite";
+  const index = openIndex(indexPath, pagesDir);
+
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
 
   app.get("/pages", (_req, res) => {
-    res.json(listSlugs(pagesDir).map((slug) => {
-      const { title } = readPage(pagesDir, slug);
-      return { slug, title };
-    }));
+    res.json(index.listPages());
   });
 
   app.get("/pages/:slug", requireValidSlug, (req, res) => {
@@ -28,25 +31,39 @@ export function createApp(options = {}) {
 
   app.put("/pages/:slug", requireValidSlug, (req, res) => {
     const body = req.body?.body;
-    if (typeof body !== "string") return res.status(400).json({ error: "body must be a string" });
+    if (typeof body !== "string") {
+      return res.status(400).json({ error: "body must be a string" });
+    }
     const existed = writePage(pagesDir, req.params.slug, body);
-    return res.status(existed ? 200 : 201).json(readPage(pagesDir, req.params.slug));
+    const page = readPage(pagesDir, req.params.slug);
+    index.indexPage(page);
+    return res.status(existed ? 200 : 201).json(page);
   });
 
   app.delete("/pages/:slug", requireValidSlug, (req, res) => {
-    if (!deletePage(pagesDir, req.params.slug)) return res.status(404).json({ error: "page not found" });
+    if (!deletePage(pagesDir, req.params.slug)) {
+      return res.status(404).json({ error: "page not found" });
+    }
+    index.removePage(req.params.slug);
     return res.status(204).end();
   });
 
   app.get("/search", (req, res) => {
     const query = typeof req.query.q === "string" ? req.query.q : "";
-    const results = listSlugs(pagesDir)
-      .map((slug) => readPage(pagesDir, slug))
-      .filter((page) => page.body.includes(query))
-      .map(({ slug, title }) => ({ slug, title }));
-    res.json({ query, results });
+    if (!query.trim()) {
+      return res.status(400).json({ error: "query is required" });
+    }
+    return res.json({ query, results: index.search(query) });
   });
 
-  app.locals.close = () => {};
+  app.get("/tags", (_req, res) => {
+    res.json(index.listTags());
+  });
+
+  app.get("/tags/:tag", (req, res) => {
+    res.json(index.findPagesByTag(req.params.tag));
+  });
+
+  app.locals.close = () => index.close();
   return app;
 }
