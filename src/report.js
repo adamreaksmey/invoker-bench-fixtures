@@ -19,14 +19,6 @@ export function groupRows(rows, { groupBy, sumColumn, count }) {
     .map((group) => toGroupRow(group, groupBy, sumColumn, count));
 }
 
-export function formatTable(rows) {
-  if (rows.length === 0) return "";
-  const columns = Object.keys(rows[0]);
-  const widths = columns.map((column) => Math.max(column.length, ...rows.map((row) => String(row[column]).length)));
-  const formatLine = (cells) => cells.map((cell, index) => String(cell).padEnd(widths[index])).join("  ").trimEnd();
-  return [formatLine(columns), ...rows.map((row) => formatLine(columns.map((column) => row[column])))].join("\n") + "\n";
-}
-
 function accumulateGroups(rows, groupBy, sumColumn) {
   const groups = new Map();
   for (const row of rows) {
