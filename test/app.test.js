@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApp } from "../src/app.js";
-import { startServer } from "./helpers.js";
+import { makeTempPath, startApp } from "./helpers.js";
 
 const FRONT_MATTER_PAGE = ["---", "title: Deploy guide", "tags: [ops, Deploy, ops]", "---", "# Deploy guide", "", "Run the release pipeline."].join("\n");
 
@@ -21,6 +20,11 @@ function makePagesDirWithFrontMatter() {
   return dir;
 }
 
+/** Opens an app over a fresh pages directory and a throwaway index file. */
+function startAppFor(pagesDir) {
+  return startApp({ pagesDir, indexPath: makeTempPath("wiki-index-", "index.sqlite") });
+}
+
 function putPage(baseUrl, slug, body) {
   return fetch(`${baseUrl}/pages/${slug}`, {
     method: "PUT",
@@ -30,7 +34,7 @@ function putPage(baseUrl, slug, body) {
 }
 
 test("lists, reads, creates, updates, and deletes pages", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+  const server = await startAppFor(makePagesDir());
   try {
     assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [{ slug: "welcome", title: "Welcome", tags: [] }]);
     assert.equal((await putPage(server.baseUrl, "notes", "# Notes\n")).status, 201);
@@ -45,7 +49,7 @@ test("lists, reads, creates, updates, and deletes pages", async () => {
 });
 
 test("GET /pages includes parsed tags and titles", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDirWithFrontMatter() }));
+  const server = await startAppFor(makePagesDirWithFrontMatter());
   try {
     assert.deepEqual(await (await fetch(`${server.baseUrl}/pages`)).json(), [
       { slug: "deploy-guide", title: "Deploy guide", tags: ["deploy", "ops"] },
@@ -58,7 +62,7 @@ test("GET /pages includes parsed tags and titles", async () => {
 });
 
 test("GET /pages/:slug returns tags and a body without front matter", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDirWithFrontMatter() }));
+  const server = await startAppFor(makePagesDirWithFrontMatter());
   try {
     assert.deepEqual(await (await fetch(`${server.baseUrl}/pages/deploy-guide`)).json(), {
       slug: "deploy-guide",
@@ -72,7 +76,7 @@ test("GET /pages/:slug returns tags and a body without front matter", async () =
 });
 
 test("PUT parses front matter from the stored file", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+  const server = await startAppFor(makePagesDir());
   try {
     const created = await (await putPage(server.baseUrl, "runbook", "---\ntags: Ops, runbook\n---\n# Runbook\n\nSteps.\n")).json();
     assert.deepEqual(created, { slug: "runbook", title: "Runbook", tags: ["ops", "runbook"], body: "# Runbook\n\nSteps.\n" });
@@ -83,8 +87,8 @@ test("PUT parses front matter from the stored file", async () => {
   }
 });
 
-test("search finds pages containing the query", async () => {
-  const server = await startServer(createApp({ pagesDir: makePagesDir() }));
+test("search finds pages containing the query ignoring case", async () => {
+  const server = await startAppFor(makePagesDir());
   try {
     const response = await (await fetch(`${server.baseUrl}/search?q=Start`)).json();
     assert.deepEqual(response.results.map((result) => result.slug), ["welcome"]);
