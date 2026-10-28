@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../src/app.js";
-import { DEFAULT_INDEX_PATH } from "../src/page-index.js";
+import { DEFAULT_INDEX_PATH, PAGE_INDEX_MIGRATIONS } from "../src/page-index.js";
 import { runMigrations, SCHEMA_VERSION_TABLE } from "../src/sqlite-migrations.js";
 import { makeTempPath, startApp } from "./helpers.js";
 
@@ -223,6 +223,81 @@ test("the index path can be overridden through WIKI_INDEX_PATH", async () => {
     app = createApp({ pagesDir });
     assert.ok(existsSync(indexPath), "index file should be created at WIKI_INDEX_PATH");
     assert.deepEqual(readIndexedSlugs(indexPath), ["welcome"]);
+  } finally {
+    app?.locals.close();
+    if (previousIndexPath === undefined) delete process.env.WIKI_INDEX_PATH;
+    else process.env.WIKI_INDEX_PATH = previousIndexPath;
+  }
+});
+
+test("createApp records the schema version in the index", async () => {
+  const indexPath = makeIndexPath();
+  const server = await startApp({ pagesDir: makePagesDir(), indexPath });
+  try {
+    const versions = readIndex(indexPath, (database) =>
+      database.prepare(`SELECT version FROM ${SCHEMA_VERSION_TABLE} ORDER BY version`).all().map((row) => row.version));
+    assert.deepEqual(versions, PAGE_INDEX_MIGRATIONS.map((migration) => migration.version));
+  } finally {
+    await server.close();
+  }
+});
+
+test("front matter is kept out of the search index but front-matter tags are indexed", async () => {
+  const pagesDir = makePagesDir();
+  writeFileSync(join(pagesDir, "front-matter.md"), "---\ntitle: Indexed title\nhidden: frontmatterword\ntags: [Ops]\n---\n# Heading\n\nbodyonlyword.\n");
+  const indexPath = makeIndexPath();
+  const server = await startApp({ pagesDir, indexPath });
+  try {
+    assert.equal(readIndexedTitles(indexPath)["front-matter"], "Indexed title");
+    assert.deepEqual(readIndexedTags(indexPath, "front-matter"), ["ops"]);
+    const indexedBody = readIndex(indexPath, (database) =>
+      database.prepare("SELECT body FROM pages WHERE slug = ?").get("front-matter").body);
+    assert.equal(indexedBody, "# Heading\n\nbodyonlyword.\n");
+  } finally {
+    await server.close();
+  }
+});
+
+test("index sync ignores non-Markdown files and invalid slugs", async () => {
+  const pagesDir = makePagesDir();
+  writeFileSync(join(pagesDir, "notes.txt"), "# Not markdown\n");
+  writeFileSync(join(pagesDir, "Bad_Slug.md"), "# Invalid slug\n");
+  const indexPath = makeIndexPath();
+  const server = await startApp({ pagesDir, indexPath });
+  try {
+    assert.deepEqual(readIndexedSlugs(indexPath), ["welcome"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("an empty or missing pages directory indexes nothing", async () => {
+  const indexPath = makeIndexPath();
+  const server = await startApp({ pagesDir: join(mkdtempSync(join(tmpdir(), "wiki-missing-")), "absent"), indexPath });
+  try {
+    assert.deepEqual(readIndexedSlugs(indexPath), []);
+  } finally {
+    await server.close();
+  }
+});
+
+test("app.locals.close closes the index database", async () => {
+  const server = await startApp({ pagesDir: makePagesDir(), indexPath: makeIndexPath() });
+  await server.close();
+  assert.throws(() => server.app.locals.close(), /database is not open|closed/i);
+});
+
+test("the indexPath option wins over WIKI_INDEX_PATH", async () => {
+  const pagesDir = makePagesDir();
+  const optionIndexPath = makeIndexPath();
+  const envIndexPath = join(mkdtempSync(join(tmpdir(), "wiki-env-")), "env.sqlite");
+  const previousIndexPath = process.env.WIKI_INDEX_PATH;
+  process.env.WIKI_INDEX_PATH = envIndexPath;
+  let app;
+  try {
+    app = createApp({ pagesDir, indexPath: optionIndexPath });
+    assert.ok(existsSync(optionIndexPath), "option index file should be created");
+    assert.equal(existsSync(envIndexPath), false, "env index file should not be created");
   } finally {
     app?.locals.close();
     if (previousIndexPath === undefined) delete process.env.WIKI_INDEX_PATH;

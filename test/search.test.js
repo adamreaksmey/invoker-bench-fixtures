@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MAX_SEARCH_RESULTS, parseSearchTerms } from "../src/search.js";
+import { BODY_WEIGHT, MAX_SEARCH_RESULTS, TITLE_WEIGHT, buildMatchExpression, buildSnippet, parseSearchTerms, scorePage } from "../src/search.js";
 import { makeTempPath, startApp } from "./helpers.js";
 
 const TITLE_MATCH_PAGE = "# Deploy guide\n\nNothing about shipping in this page.\n";
@@ -153,6 +153,77 @@ test("search terms drop punctuation so no query can reach FTS5 syntax", () => {
   assert.deepEqual(parseSearchTerms("café"), ["cafe"]);
   assert.deepEqual(parseSearchTerms('"!?*()"'), []);
   assert.deepEqual(parseSearchTerms(undefined), []);
+  assert.deepEqual(parseSearchTerms(42), []);
+});
+
+test("buildMatchExpression ANDs every quoted term", () => {
+  assert.equal(buildMatchExpression(["deploy", "incident"]), '"deploy" AND "incident"');
+  assert.equal(buildMatchExpression(["cafe"]), '"cafe"');
+});
+
+test("a snippet keeps a body that already fits intact and returns empty for an empty body", () => {
+  assert.equal(buildSnippet("short body deploy", ["deploy"]), "short body **deploy**");
+  assert.equal(buildSnippet("", ["deploy"]), "");
+  assert.equal(buildSnippet("   \n\t ", ["deploy"]), "");
+});
+
+test("a snippet near the end of a long body is windowed and marked with ellipses", () => {
+  const filler = Array.from({ length: 40 }, (_, index) => `word${index}`).join(" ");
+  const snippet = buildSnippet(`${filler} deploy at the end ${filler}`, ["deploy"]);
+  assert.match(snippet, /\*\*deploy\*\*/);
+  assert.ok(snippet.startsWith("..."), "leading ellipsis when the window starts mid-body");
+  assert.ok(snippet.endsWith("..."), "trailing ellipsis when the window stops mid-body");
+  assert.ok(snippet.length < filler.length, "snippet should be much shorter than the body");
+});
+
+test("scorePage weights title hits above body hits and sums every term", () => {
+  assert.equal(scorePage({ title: "Deploy", body: "nothing" }, ["deploy"]), TITLE_WEIGHT);
+  assert.equal(scorePage({ title: "Nothing", body: "deploy" }, ["deploy"]), BODY_WEIGHT);
+  assert.equal(scorePage({ title: "Deploy", body: "deploy deploy" }, ["deploy"]), TITLE_WEIGHT + 2 * BODY_WEIGHT);
+  assert.equal(scorePage({ title: "Deploy incident", body: "" }, ["deploy", "incident"]), 2 * TITLE_WEIGHT);
+  assert.equal(scorePage({ title: "Nothing", body: "nothing" }, ["deploy"]), 0);
+});
+
+test("search only matches body text, not other front-matter keys", async () => {
+  const server = await startAppFor({
+    plain: "---\ntitle: Plain\nsecretkey: hiddenvalue\n---\n# Plain\n\nnothing here\n",
+  });
+  try {
+    assert.deepEqual((await (await search(server.baseUrl, "hiddenvalue")).json()).results, []);
+    assert.deepEqual((await (await search(server.baseUrl, "plain")).json()).results.map((result) => result.slug), ["plain"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("search matches the front-matter title", async () => {
+  const server = await startAppFor({
+    runbook: "---\ntitle: uniquefrontmattertitle\n---\nbody with nothing special\n",
+  });
+  try {
+    const { results } = await (await search(server.baseUrl, "uniquefrontmattertitle")).json();
+    assert.equal(results.length, 1);
+    assert.equal(results[0].slug, "runbook");
+    assert.equal(results[0].title, "uniquefrontmattertitle");
+    assert.ok(results[0].score > 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test("search breaks score ties by slug so ordering is deterministic", async () => {
+  const server = await startAppFor({
+    zulu: "# Zulu\n\ndeploy notes.\n",
+    alpha: "# Alpha\n\ndeploy notes.\n",
+    mike: "# Mike\n\ndeploy notes.\n",
+  });
+  try {
+    const { results } = await (await search(server.baseUrl, "deploy")).json();
+    assert.deepEqual(results.map((result) => result.slug), ["alpha", "mike", "zulu"]);
+    assert.equal(new Set(results.map((result) => result.score)).size, 1, "all three should tie");
+  } finally {
+    await server.close();
+  }
 });
 
 test("search reads the index, so PUT and DELETE are reflected immediately", async () => {

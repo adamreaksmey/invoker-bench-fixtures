@@ -90,6 +90,52 @@ test("GET /tags/:tag returns an empty list for an unknown tag", async () => {
   }
 });
 
+test("GET /tags/:tag trims surrounding whitespace from the requested tag", async () => {
+  const server = await startAppFor(OPS_TAGGED_PAGES);
+  try {
+    const expected = [
+      { slug: "deploy-guide", title: "Deploy guide" },
+      { slug: "on-call", title: "On-call handbook" },
+      { slug: "release-notes", title: "Release notes" },
+    ];
+    assert.deepEqual(await getJson(server.baseUrl, "/tags/%20ops%20"), expected);
+  } finally {
+    await server.close();
+  }
+});
+
+test("GET /tags counts a page once per tag even when the tag repeats in its front matter", async () => {
+  const server = await startAppFor({
+    duplicated: "---\ntags: [ops, Ops, OPS]\n---\n# Duplicated\n",
+    single: "---\ntags: ops\n---\n# Single\n",
+  });
+  try {
+    assert.deepEqual(await getJson(server.baseUrl, "/tags"), [{ tag: "ops", count: 2 }]);
+    assert.deepEqual(await getJson(server.baseUrl, "/tags/ops"), [
+      { slug: "duplicated", title: "Duplicated" },
+      { slug: "single", title: "Single" },
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("GET /tags omits untagged pages and orders ties alphabetically", async () => {
+  const server = await startAppFor({
+    alpha: "---\ntags: zulu, alpha\n---\n# Alpha\n",
+    beta: "---\ntags: [zulu]\n---\n# Beta\n",
+    untagged: "# Untagged\n",
+  });
+  try {
+    assert.deepEqual(await getJson(server.baseUrl, "/tags"), [
+      { tag: "zulu", count: 2 },
+      { tag: "alpha", count: 1 },
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
 test("tag endpoints read the index, so PUT and DELETE are reflected immediately", async () => {
   const server = await startAppFor({ welcome: "# Welcome\n" });
   try {

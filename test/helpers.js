@@ -28,14 +28,6 @@ export async function startApp(options) {
   };
 }
 
-export function postJson(baseUrl, path, body) {
-  return fetch(`${baseUrl}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
 /** Returns a path inside a fresh temporary directory, for throwaway SQLite files. */
 export function makeTempPath(prefix, fileName) {
   return join(mkdtempSync(join(tmpdir(), prefix)), fileName);
