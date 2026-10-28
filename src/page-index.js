@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { parsePage } from "./front-matter.js";
 import { listSlugs, pagePath } from "./pages.js";
+import { buildMatchExpression, parseSearchTerms, rankSearchResults } from "./search.js";
 import { runInTransaction, runMigrations } from "./sqlite-migrations.js";
 
 export const DEFAULT_INDEX_PATH = "wiki-index.sqlite";
@@ -10,6 +11,8 @@ export const DEFAULT_INDEX_PATH = "wiki-index.sqlite";
 const CONTENT_HASH_ALGORITHM = "sha256";
 const SEARCH_TABLE = "pages_fts";
 const FTS_TOKENIZER = "unicode61 remove_diacritics 2";
+
+const SEARCH_CANDIDATES_SQL = `SELECT slug, title, body FROM ${SEARCH_TABLE} WHERE ${SEARCH_TABLE} MATCH ?`;
 
 const CREATE_PAGE_INDEX_SQL = `
   CREATE TABLE pages (
@@ -54,6 +57,7 @@ function prepareStatements(database) {
     insertPageTag: database.prepare("INSERT INTO page_tags (slug, tag) VALUES (?, ?)"),
     deleteSearchRow: database.prepare(`DELETE FROM ${SEARCH_TABLE} WHERE slug = ?`),
     insertSearchRow: database.prepare(`INSERT INTO ${SEARCH_TABLE} (slug, title, body) VALUES (?, ?, ?)`),
+    selectSearchCandidates: database.prepare(SEARCH_CANDIDATES_SQL),
   };
 }
 
@@ -124,9 +128,18 @@ export function createPageIndex({ pagesDir, indexPath }) {
     for (const vanishedSlug of indexedHashes.keys()) removePage(vanishedSlug);
   }
 
+  /** Ranked matches for `queryText`, best first; punctuation is stripped before MATCH. */
+  function search(queryText) {
+    const terms = parseSearchTerms(queryText);
+    if (terms.length === 0) return [];
+    const candidates = statements.selectSearchCandidates.all(buildMatchExpression(terms));
+    return rankSearchResults(candidates, terms);
+  }
+
   return {
     replacePage,
     removePage,
+    search,
     syncWithDirectory,
     close: () => database.close(),
   };

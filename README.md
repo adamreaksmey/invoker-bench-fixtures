@@ -3,7 +3,20 @@
 A small Express wiki. Each page is a Markdown file in `pages/` named `<slug>.md`.
 
 - `GET /pages`, `GET /pages/:slug`, `PUT /pages/:slug { body }`, `DELETE /pages/:slug`
-- `GET /search?q=` — substring search
+- `GET /search?q=` — full-text search over the SQLite index
+
+## Search
+
+`GET /search?q=<terms>` returns `{ query, results: [ { slug, title, snippet, score } ] }`. Matching is
+case-insensitive and every term must be present (AND), so `deploy incident` only returns pages
+containing both words. Results are ordered best first, with title matches weighted above body
+matches (a term repeated in the body also helps); `score` is a number where higher is more relevant,
+and the list is capped at 20 entries. `snippet` is a short body excerpt with each matched term
+wrapped in `**`.
+
+Query punctuation and quotes are plain text: input is split into word tokens before it reaches FTS5,
+so `"deploy"`, `deploy*`, or `c++` can never be read as query syntax or cause a 500. A query with no
+word characters returns an empty result list. A missing or blank `q` is `400 { error }`.
 
 ## SQLite index
 

@@ -1,6 +1,7 @@
 import express from "express";
 import { DEFAULT_INDEX_PATH, createPageIndex } from "./page-index.js";
 import { SLUG_PATTERN, deletePage, listSlugs, readPage, writePage } from "./pages.js";
+import { isBlankQuery } from "./search.js";
 
 function requireValidSlug(req, res, next) {
   if (!SLUG_PATTERN.test(req.params.slug)) return res.status(400).json({ error: "invalid slug" });
@@ -50,12 +51,9 @@ export function createApp(options = {}) {
   });
 
   app.get("/search", (req, res) => {
-    const query = typeof req.query.q === "string" ? req.query.q : "";
-    const results = listSlugs(pagesDir)
-      .map((slug) => readPage(pagesDir, slug))
-      .filter((page) => page.body.includes(query))
-      .map(({ slug, title }) => ({ slug, title }));
-    res.json({ query, results });
+    const query = req.query.q;
+    if (isBlankQuery(query)) return res.status(400).json({ error: "q is required" });
+    return res.json({ query, results: index.search(query) });
   });
 
   app.locals.close = () => index.close();
