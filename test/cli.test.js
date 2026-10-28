@@ -50,6 +50,19 @@ test("prints usage without an input file", () => {
   assert.match(result.stderr, /^usage:/);
 });
 
+test("errors reading a missing input file", () => {
+  const result = runCli(["/does/not/exist.csv"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^error:/);
+});
+
+test("errors reading a non-file input path", () => {
+  const tempDir = makeTempDir();
+  const result = runCli([tempDir]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^error:/);
+});
+
 test("validates rows against a schema", () => {
   const schema = {
     columns: {
