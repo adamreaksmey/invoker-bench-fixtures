@@ -111,10 +111,11 @@ test("PUT stores full markdown and response excludes front matter from body", as
   }
 });
 
-test("search requires a query", async () => {
+test("search requires a non-blank query", async () => {
   const server = await startServer(createTestApp(makePagesDir()));
   try {
-    assert.equal((await fetch(`${server.baseUrl}/search`)).status, 400);
+    const missing = await (await fetch(`${server.baseUrl}/search`)).json();
+    assert.deepEqual(missing, { error: "query is required" });
     assert.equal((await fetch(`${server.baseUrl}/search?q=`)).status, 400);
     assert.equal((await fetch(`${server.baseUrl}/search?q=%20`)).status, 400);
   } finally {
@@ -122,7 +123,31 @@ test("search requires a query", async () => {
   }
 });
 
-test("search ranks title matches above body matches", async () => {
+test("search is case-insensitive", async () => {
+  const server = await startServer(createTestApp(makePagesDir()));
+  try {
+    const lower = await (await fetch(`${server.baseUrl}/search?q=start`)).json();
+    const upper = await (await fetch(`${server.baseUrl}/search?q=START`)).json();
+    assert.deepEqual(lower.results.map((result) => result.slug), ["welcome"]);
+    assert.deepEqual(upper.results.map((result) => result.slug), ["welcome"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("search requires all terms to match", async () => {
+  const server = await startServer(createTestApp(makePagesDir()));
+  try {
+    const response = await (await fetch(`${server.baseUrl}/search?q=Start%20here`)).json();
+    assert.deepEqual(response.results.map((result) => result.slug), ["welcome"]);
+    const noMatch = await (await fetch(`${server.baseUrl}/search?q=Start%20nowhere`)).json();
+    assert.deepEqual(noMatch.results, []);
+  } finally {
+    await server.close();
+  }
+});
+
+test("search ranks title matches above body matches with numeric scores", async () => {
   const pagesDir = makePagesDir();
   writeFileSync(join(pagesDir, "body-match.md"), "# Irrelevant title\n\nStart here with important content.\n");
   writeFileSync(join(pagesDir, "title-match.md"), "# Start here\n\nIrrelevant body.\n");
@@ -131,6 +156,7 @@ test("search ranks title matches above body matches", async () => {
     const { results } = await (await fetch(`${server.baseUrl}/search?q=Start`)).json();
     assert.deepEqual(results.map((result) => result.slug), ["title-match", "welcome", "body-match"]);
     const scores = results.map((result) => result.score);
+    assert.ok(scores.every((score) => typeof score === "number"));
     assert.ok(scores[0] > scores[1]);
     assert.ok(scores[1] > scores[2]);
   } finally {
@@ -148,6 +174,9 @@ test("search treats punctuation and quotes as plain text", async () => {
       const response = await fetch(`${server.baseUrl}/search?q=${encodeURIComponent(q)}`);
       assert.equal(response.status, 200, `query ${q} should not error`);
     }
+    const quoted = await (await fetch(`${server.baseUrl}/search?q=${encodeURIComponent('"world"')}`)).json();
+    assert.ok(quoted.results.some((result) => result.slug === "punctuation"));
+    assert.ok(quoted.results[0].snippet.includes("**world**"));
   } finally {
     await server.close();
   }

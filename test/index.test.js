@@ -183,12 +183,51 @@ test("searchPages limits results and returns snippets", () => {
   }
 });
 
+test("searchPages is case-insensitive", () => {
+  const db = inMemoryDb();
+  try {
+    upsertPageInIndex(db, parsePage("guide", "# Hello World\n\nBody text.\n"), 1);
+    const lower = searchPages(db, "hello world");
+    const upper = searchPages(db, "HELLO WORLD");
+    assert.deepEqual(lower.results.map((result) => result.slug), ["guide"]);
+    assert.deepEqual(upper.results.map((result) => result.slug), ["guide"]);
+  } finally {
+    db.close();
+  }
+});
+
+test("searchPages requires all terms to match", () => {
+  const db = inMemoryDb();
+  try {
+    upsertPageInIndex(db, parsePage("a", "# Alpha\n\nApple banana.\n"), 1);
+    upsertPageInIndex(db, parsePage("b", "# Beta\n\nApple cherry.\n"), 1);
+    const { results } = searchPages(db, "apple banana");
+    assert.deepEqual(results.map((result) => result.slug), ["a"]);
+  } finally {
+    db.close();
+  }
+});
+
 test("searchPages treats punctuation and quotes as plain text", () => {
   const db = inMemoryDb();
   try {
     upsertPageInIndex(db, parsePage("punctuation", "# Punctuation\n\nHello \"world\" and can't stop.\n"), 1);
     for (const query of ['"hello', "can't", "\"world\"", "-stop", "!!!"]) {
       assert.doesNotThrow(() => searchPages(db, query), `query ${query} should not throw`);
+    }
+    const quoted = searchPages(db, "\"world\"");
+    assert.ok(quoted.results.some((result) => result.slug === "punctuation"));
+  } finally {
+    db.close();
+  }
+});
+
+test("searchPages returns empty results for punctuation-only queries", () => {
+  const db = inMemoryDb();
+  try {
+    upsertPageInIndex(db, parsePage("page", "# Page\n\nContent.\n"), 1);
+    for (const query of ["!", "?", "*", "-", "'", "\"", "(", ")"]) {
+      assert.deepEqual(searchPages(db, query).results, [], `query ${query} should return no results`);
     }
   } finally {
     db.close();

@@ -139,21 +139,17 @@ function tokenizeQuery(query) {
   return query.trim().split(/\s+/).filter((word) => word.length > 0);
 }
 
-function escapeFtsTerm(word) {
+function toFts5Term(word) {
   const escaped = word.replace(/"/g, '""');
   return `"${escaped}"`;
 }
 
-function buildFtsQuery(words) {
-  return words.map(escapeFtsTerm).join(" AND ");
+function toFts5Query(words) {
+  return words.map(toFts5Term).join(" AND ");
 }
 
-export function searchPages(db, rawQuery) {
-  const words = tokenizeQuery(rawQuery);
-  if (words.length === 0) return { query: rawQuery, results: [] };
-
-  const ftsQuery = buildFtsQuery(words);
-  const rows = db.prepare(`
+function runSearchQuery(db, ftsQuery) {
+  return db.prepare(`
     SELECT slug, title,
       snippet(${FTS_TABLE}, ${FTS_SNIPPET_COLUMN}, '${SNIPPET_START_MATCH}', '${SNIPPET_END_MATCH}', '${SNIPPET_ELLIPSIS}', ${SNIPPET_TOKENS}) AS snippet,
       -bm25(${FTS_TABLE}, ${SLUG_FTS_WEIGHT}, ${TITLE_FTS_WEIGHT}, ${BODY_FTS_WEIGHT}) AS score
@@ -162,10 +158,20 @@ export function searchPages(db, rawQuery) {
     ORDER BY score DESC
     LIMIT ${MAX_SEARCH_RESULTS}
   `).all(ftsQuery);
+}
 
+function toSearchResult(row) {
+  return { slug: row.slug, title: row.title, snippet: row.snippet, score: row.score };
+}
+
+export function searchPages(db, rawQuery) {
+  const words = tokenizeQuery(rawQuery);
+  if (words.length === 0) return { query: rawQuery, results: [] };
+
+  const rows = runSearchQuery(db, toFts5Query(words));
   return {
     query: rawQuery,
-    results: rows.map((row) => ({ slug: row.slug, title: row.title, snippet: row.snippet, score: row.score })),
+    results: rows.map(toSearchResult),
   };
 }
 
