@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupRows } from "../src/report.js";
+import { groupRows, formatCsv, formatJson, formatRows } from "../src/report.js";
 
 function makeRow(region, amount) {
   return { region, amount };
@@ -53,4 +53,42 @@ test("groupRows avoids floating-point noise by rounding sums", () => {
   const rows = [makeRow("north", 0.1), makeRow("north", 0.2)];
   const result = groupRows(rows, "region", { sumColumn: "amount" });
   assert.deepEqual(result, [{ region: "north", sum_amount: 0.3 }]);
+});
+
+test("formatJson pretty-prints an array with 2-space indent and trailing newline", () => {
+  const rows = [{ name: "apple", amount: 2.5 }];
+  assert.equal(formatJson(rows), '[\n  {\n    "name": "apple",\n    "amount": 2.5\n  }\n]\n');
+});
+
+test("formatJson serialises numbers as JSON numbers", () => {
+  const rows = [{ region: "north", sum_amount: 4, count: 2 }];
+  assert.equal(formatJson(rows), '[\n  {\n    "region": "north",\n    "sum_amount": 4,\n    "count": 2\n  }\n]\n');
+});
+
+test("formatCsv emits a header and quoted fields only when needed", () => {
+  const rows = [{ name: "apple, inc", amount: 2 }, { name: "pear", amount: 3 }];
+  assert.equal(formatCsv(rows), 'name,amount\n"apple, inc",2\npear,3\n');
+});
+
+test("formatCsv escapes quotes and newlines", () => {
+  const rows = [
+    { name: "a", note: "x\ny" },
+    { name: "b", note: 'say "hi"' },
+  ];
+  assert.equal(formatCsv(rows), 'name,note\na,"x\ny"\nb,"say ""hi"""\n');
+});
+
+test("formatCsv returns an empty string for no rows", () => {
+  assert.equal(formatCsv([]), "");
+});
+
+test("formatRows dispatches to the named format", () => {
+  const rows = [{ name: "apple" }];
+  assert.equal(formatRows(rows, "json"), formatJson(rows));
+  assert.equal(formatRows(rows, "csv"), formatCsv(rows));
+  assert.equal(formatRows(rows, "table"), 'name\napple\n');
+});
+
+test("formatRows throws for an unknown format", () => {
+  assert.throws(() => formatRows([], "xml"), /unknown format 'xml'/);
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.js";
@@ -167,4 +167,61 @@ test("errors reading a missing schema file", () => {
   const result = runCli([writeCsv("region\nnorth\n"), "--schema", "/does/not/exist.json"]);
   assert.equal(result.exitCode, 1);
   assert.match(result.stderr, /^error:/);
+});
+
+test("outputs json format with numeric values", () => {
+  const result = runCli([
+    writeCsv("region,amount\nnwest,1\nsouth,2\nnwest,3\n"),
+    "--group-by",
+    "region",
+    "--sum",
+    "amount",
+    "--count",
+    "--format",
+    "json",
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(JSON.parse(result.stdout), [
+    { region: "nwest", sum_amount: 4, count: 2 },
+    { region: "south", sum_amount: 2, count: 1 },
+  ]);
+});
+
+test("outputs csv format with quoted fields", () => {
+  const result = runCli([
+    writeCsv('name,amount\n"apple, inc",2\npear,3\n'),
+    "--format",
+    "csv",
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, 'name,amount\n"apple, inc",2\npear,3\n');
+});
+
+test("--out writes output to a file and leaves stdout empty", () => {
+  const tempDir = makeTempDir();
+  const inputPath = join(tempDir, "input.csv");
+  const outputPath = join(tempDir, "output.csv");
+  writeFileSync(inputPath, "name,amount\napple,2\n");
+  const result = runCli([inputPath, "--format", "csv", "--out", outputPath]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(readFileSync(outputPath, "utf8"), "name,amount\napple,2\n");
+});
+
+test("errors on an unknown --format value", () => {
+  const result = runCli([writeCsv("name,amount\napple,2\n"), "--format", "xml"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^usage:/);
+});
+
+test("errors on an unknown flag", () => {
+  const result = runCli([writeCsv("name,amount\napple,2\n"), "--unknown"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^usage:/);
+});
+
+test("errors when --format is missing its value", () => {
+  const result = runCli([writeCsv("name,amount\napple,2\n"), "--format"]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^usage:/);
 });
