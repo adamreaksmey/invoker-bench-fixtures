@@ -227,3 +227,113 @@ function restoreEnvironmentVariable(name, previousValue) {
   }
   process.env[name] = previousValue;
 }
+
+test("windows are aligned to epoch multiples of the window length", async () => {
+  const clock = createSettableClock(WINDOW_START_MS + WINDOW_MS / 2);
+  const { temporaryApp, server } = await startLimitedServer(clock);
+  try {
+    await exhaustLimit(server);
+    assert.equal((await postLink(server)).status, 429);
+
+    // Still inside the same epoch-aligned window: the counter must not reset.
+    clock.set(WINDOW_START_MS + WINDOW_MS - 1);
+    assert.equal((await postLink(server)).status, 429);
+
+    clock.set(WINDOW_START_MS + WINDOW_MS);
+    assert.equal((await postLink(server)).status, 201);
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});
+
+test("repeated rejections stay limited and never fall back below one second", async () => {
+  const clock = createSettableClock(WINDOW_START_MS);
+  const { temporaryApp, server } = await startLimitedServer(clock);
+  try {
+    await exhaustLimit(server);
+    const firstRetryAfter = requireRetryAfterSeconds(await postLink(server));
+
+    clock.set(WINDOW_START_MS + WINDOW_MS - 1_500);
+    const laterRetryAfter = requireRetryAfterSeconds(await postLink(server));
+
+    assert.equal(firstRetryAfter, 60);
+    assert.equal(laterRetryAfter, 2);
+    assert.ok(laterRetryAfter < firstRetryAfter, "Retry-After must shrink as the window elapses");
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});
+
+test("rejected requests do not consume the remaining allowance", async () => {
+  const clock = createSettableClock(WINDOW_START_MS);
+  const { temporaryApp, server } = await startLimitedServer(clock);
+  try {
+    await createAllowedLinks(server, LIMIT_MAX - 1);
+    assert.equal((await postLink(server)).status, 201);
+    assert.equal((await postLink(server)).status, 429);
+
+    clock.set(WINDOW_START_MS + WINDOW_MS);
+    await createAllowedLinks(server, LIMIT_MAX);
+    assert.equal((await postLink(server)).status, 429);
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});
+
+test("rateLimitWindowMs controls the length of the limited window", async () => {
+  const SHORT_WINDOW_MS = 1_000;
+  const clock = createSettableClock(WINDOW_START_MS);
+  const temporaryApp = createTemporaryApp({
+    now: clock.now,
+    rateLimitMax: LIMIT_MAX,
+    rateLimitWindowMs: SHORT_WINDOW_MS,
+  });
+  const server = await startServer(temporaryApp.app);
+  try {
+    await exhaustLimit(server);
+    const limited = await postLink(server);
+    assert.equal(limited.status, 429);
+    assert.equal(requireRetryAfterSeconds(limited), 1);
+
+    clock.set(WINDOW_START_MS + SHORT_WINDOW_MS);
+    assert.equal((await postLink(server)).status, 201);
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});
+
+test("validation failures still count toward the rate limit", async () => {
+  const clock = createSettableClock(WINDOW_START_MS);
+  const { temporaryApp, server } = await startLimitedServer(clock);
+  try {
+    for (let requestIndex = 0; requestIndex < LIMIT_MAX; requestIndex += 1) {
+      const response = await postLink(server, { url: "not-a-url" });
+      assert.equal(response.status, 400);
+    }
+    assert.equal((await postLink(server)).status, 429);
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});
+
+test("RATE_LIMIT_MAX takes precedence over the built-in default but not over options", async () => {
+  const clock = createSettableClock(WINDOW_START_MS);
+  const previousMax = process.env.RATE_LIMIT_MAX;
+  process.env.RATE_LIMIT_MAX = "1";
+  const temporaryApp = createTemporaryApp({ now: clock.now, rateLimitMax: 2 });
+  const server = await startServer(temporaryApp.app);
+  try {
+    assert.equal((await postLink(server)).status, 201);
+    assert.equal((await postLink(server)).status, 201);
+    assert.equal((await postLink(server)).status, 429);
+  } finally {
+    await server.close();
+    temporaryApp.close();
+    restoreEnvironmentVariable("RATE_LIMIT_MAX", previousMax);
+  }
+});

@@ -109,3 +109,75 @@ test("generates a code when the custom code is omitted", async () => {
     assert.match(response.body.code, /^[A-Za-z0-9_-]{3,32}$/);
   });
 });
+
+test("treats a null custom code as omitted", async () => {
+  await withServer(async (server) => {
+    const response = await postLink(server, { url: VALID_URL, code: null });
+    assert.equal(response.status, 201);
+    assert.match(response.body.code, /^[A-Za-z0-9_-]{3,32}$/);
+  });
+});
+
+test("rejects a non-string custom code with 400", async () => {
+  await withServer(async (server) => {
+    for (const code of [42, true, [], {}]) {
+      const response = await postLink(server, { url: VALID_URL, code });
+      assert.equal(response.status, 400, `expected 400 for code ${JSON.stringify(code)}`);
+      assert.equal(typeof response.body.error, "string");
+    }
+  });
+});
+
+test("accepts urls with uppercase schemes and mixed-case hosts", async () => {
+  await withServer(async (server) => {
+    for (const url of ["HTTPS://Example.com/Docs", "HTTP://example.com/a"]) {
+      const response = await postLink(server, { url });
+      assert.equal(response.status, 201, `expected 201 for ${url}`);
+      assert.equal(response.body.url, url);
+    }
+  });
+});
+
+test("rejects a malformed JSON body with a JSON 400 error", async () => {
+  await withServer(async (server) => {
+    const response = await fetch(`${server.baseUrl}/links`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{oops",
+    });
+    assert.equal(response.status, 400);
+    assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+    const body = await response.json();
+    assert.equal(typeof body.error, "string");
+  });
+});
+
+test("a rejected request creates no link", async () => {
+  await withServer(async (server) => {
+    const response = await postLink(server, { url: "not-a-url", code: "rejected" });
+    assert.equal(response.status, 400);
+    assert.equal((await fetch(`${server.baseUrl}/links/rejected`)).status, 404);
+  });
+});
+
+test("existing routes keep their documented response shapes", async () => {
+  await withServer(async (server) => {
+    const created = await postLink(server, { url: VALID_URL, code: "shapes" });
+    assert.equal(created.status, 201);
+    assert.deepEqual(Object.keys(created.body).sort(), ["code", "shortUrl", "url"]);
+    assert.equal(created.body.shortUrl, `/shapes`);
+
+    const metadataResponse = await fetch(`${server.baseUrl}/links/shapes`);
+    assert.equal(metadataResponse.status, 200);
+    const metadata = await metadataResponse.json();
+    assert.deepEqual(Object.keys(metadata).sort(), ["code", "createdAt", "url"]);
+
+    const statsResponse = await fetch(`${server.baseUrl}/links/shapes/stats`);
+    assert.equal(statsResponse.status, 200);
+    const stats = await statsResponse.json();
+    assert.deepEqual(
+      Object.keys(stats).sort(),
+      ["clicksByDay", "code", "lastClickedAt", "totalClicks", "url"],
+    );
+  });
+});

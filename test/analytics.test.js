@@ -202,3 +202,79 @@ test("redirecting an unknown code records no click and returns 404", async () =>
     temporaryApp.close();
   }
 });
+
+test("clicks are attributed to the redirected link only", async () => {
+  const clock = createSettableClock(FIRST_CLICK_MS);
+  const temporaryApp = createTemporaryApp({ now: clock.now });
+  const server = await startServer(temporaryApp.app);
+  try {
+    await createLink(server, "clicked");
+    await createLink(server, "untouched");
+    await followRedirect(server, "clicked");
+    clock.set(SECOND_CLICK_MS);
+    await followRedirect(server, "clicked");
+
+    const clickedStats = await readStats(server, "clicked");
+    assert.equal(clickedStats.body.totalClicks, 2);
+
+    const untouchedStats = await readStats(server, "untouched");
+    assert.equal(untouchedStats.body.totalClicks, 0);
+    assert.equal(untouchedStats.body.lastClickedAt, null);
+    assert.deepEqual(untouchedStats.body.clicksByDay, {});
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});
+
+test("clicksByDay keys are UTC YYYY-MM-DD dates in ascending order", async () => {
+  const EARLIEST_CLICK_MS = Date.UTC(2025, 11, 31, 23, 59, 59, 999);
+  const clock = createSettableClock(NEXT_DAY_CLICK_MS);
+  const temporaryApp = createTemporaryApp({ now: clock.now });
+  const server = await startServer(temporaryApp.app);
+  try {
+    await createLink(server, "ordered");
+    await followRedirect(server, "ordered");
+    clock.set(EARLIEST_CLICK_MS);
+    await followRedirect(server, "ordered");
+    clock.set(SECOND_CLICK_MS);
+    await followRedirect(server, "ordered");
+
+    const stats = await readStats(server, "ordered");
+    assert.deepEqual(Object.keys(stats.body.clicksByDay), [
+      "2025-12-31",
+      "2026-01-02",
+      "2026-01-03",
+    ]);
+    for (const dayKey of Object.keys(stats.body.clicksByDay)) {
+      assert.match(dayKey, /^\d{4}-\d{2}-\d{2}$/);
+    }
+    assert.deepEqual(stats.body.clicksByDay, {
+      "2025-12-31": 1,
+      "2026-01-02": 1,
+      "2026-01-03": 1,
+    });
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});
+
+test("stats report an ISO lastClickedAt for the most recent click", async () => {
+  const clock = createSettableClock(FIRST_CLICK_MS);
+  const temporaryApp = createTemporaryApp({ now: clock.now });
+  const server = await startServer(temporaryApp.app);
+  try {
+    await createLink(server, "latest");
+    clock.set(NEXT_DAY_CLICK_MS);
+    await followRedirect(server, "latest");
+    clock.set(SECOND_CLICK_MS);
+    await followRedirect(server, "latest");
+
+    const stats = await readStats(server, "latest");
+    assert.equal(stats.body.lastClickedAt, new Date(NEXT_DAY_CLICK_MS).toISOString());
+  } finally {
+    await server.close();
+    temporaryApp.close();
+  }
+});

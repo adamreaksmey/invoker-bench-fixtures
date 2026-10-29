@@ -15,6 +15,7 @@ const HTTP_BAD_REQUEST = 400;
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
 const HTTP_TOO_MANY_REQUESTS = 429;
+const HTTP_INTERNAL_SERVER_ERROR = 500;
 const HTTP_FOUND = 302;
 const NOT_FOUND_ERROR = "link not found";
 const MISSING_URL_ERROR = "url is required";
@@ -22,6 +23,15 @@ const INVALID_URL_ERROR = "url must be an absolute http or https URL";
 const INVALID_CODE_ERROR = "code must match ^[A-Za-z0-9_-]{3,32}$";
 const CONFLICTING_CODE_ERROR = "code already exists";
 const RATE_LIMIT_ERROR = "too many link creation requests, retry later";
+const INVALID_BODY_ERROR = "request body must be valid JSON";
+const BODY_TOO_LARGE_ERROR = "request body is too large";
+const INTERNAL_ERROR = "internal server error";
+const BODY_ERROR_TYPES = new Map([
+  ["entity.parse.failed", INVALID_BODY_ERROR],
+  ["entity.too.large", BODY_TOO_LARGE_ERROR],
+]);
+const MINIMUM_CLIENT_ERROR_STATUS = 400;
+const MAXIMUM_CLIENT_ERROR_STATUS = 499;
 const DEFAULT_RATE_LIMIT_MAX = 20;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const RETRY_AFTER_HEADER = "Retry-After";
@@ -103,6 +113,26 @@ function handleReadStats(req, res, { linkRepository, clickRepository }) {
   });
 }
 
+function isClientErrorStatus(status) {
+  return status >= MINIMUM_CLIENT_ERROR_STATUS && status <= MAXIMUM_CLIENT_ERROR_STATUS;
+}
+
+function resolveErrorResponse(error) {
+  if (!isClientErrorStatus(error?.status)) {
+    return { status: HTTP_INTERNAL_SERVER_ERROR, message: INTERNAL_ERROR };
+  }
+  return {
+    status: error.status,
+    message: BODY_ERROR_TYPES.get(error.type) ?? INVALID_BODY_ERROR,
+  };
+}
+
+function handleError(error, req, res, next) {
+  if (res.headersSent) return next(error);
+  const { status, message } = resolveErrorResponse(error);
+  return res.status(status).json({ error: message });
+}
+
 function registerRoutes(app, dependencies) {
   app.post("/links", (req, res) => handleCreateLink(req, res, dependencies));
   app.get("/links/:code/stats", (req, res) => handleReadStats(req, res, dependencies));
@@ -162,6 +192,7 @@ export function createApp(options = {}) {
   app.disable("x-powered-by");
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   registerRoutes(app, dependencies);
+  app.use(handleError);
   app.locals.close = createCloseHook(database);
   return app;
 }
