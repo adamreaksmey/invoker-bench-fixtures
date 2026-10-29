@@ -16,12 +16,31 @@ const CREATE_LINKS_TABLE_SQL = `
   ) STRICT
 `;
 
+const CREATE_CLICKS_TABLE_SQL = `
+  CREATE TABLE clicks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL REFERENCES links (code) ON DELETE CASCADE,
+    clicked_at_ms INTEGER NOT NULL,
+    referer TEXT
+  ) STRICT
+`;
+
+const CREATE_CLICKS_CODE_INDEX_SQL = "CREATE INDEX clicks_code_idx ON clicks (code)";
+
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
     version: 1,
     description: "create links table",
     up(database) {
       database.exec(CREATE_LINKS_TABLE_SQL);
+    },
+  }),
+  Object.freeze({
+    version: 2,
+    description: "create clicks table",
+    up(database) {
+      database.exec(CREATE_CLICKS_TABLE_SQL);
+      database.exec(CREATE_CLICKS_CODE_INDEX_SQL);
     },
   }),
 ]);

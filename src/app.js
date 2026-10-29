@@ -1,6 +1,7 @@
 import express from "express";
 import { randomBytes } from "node:crypto";
 import { openDatabase } from "./database.js";
+import { createClickRepository } from "./click-repository.js";
 import { createLinkRepository } from "./link-repository.js";
 import { isValidAbsoluteHttpUrl, isValidCustomCode } from "./validation.js";
 
@@ -67,14 +68,33 @@ function handleReadLink(req, res, { linkRepository }) {
   return res.json(link);
 }
 
-function handleRedirect(req, res, { linkRepository }) {
+function handleRedirect(req, res, { linkRepository, clickRepository, now }) {
   const link = linkRepository.findByCode(req.params.code);
   if (!link) return res.status(HTTP_NOT_FOUND).json({ error: NOT_FOUND_ERROR });
+  clickRepository.record({
+    code: link.code,
+    clickedAtMs: now(),
+    referer: req.get("referer") ?? null,
+  });
   return res.redirect(HTTP_FOUND, link.url);
+}
+
+function handleReadStats(req, res, { linkRepository, clickRepository }) {
+  const link = linkRepository.findByCode(req.params.code);
+  if (!link) return res.status(HTTP_NOT_FOUND).json({ error: NOT_FOUND_ERROR });
+  const summary = clickRepository.summarize(link.code);
+  return res.json({
+    code: link.code,
+    url: link.url,
+    totalClicks: summary.totalClicks,
+    lastClickedAt: summary.lastClickedAt,
+    clicksByDay: summary.clicksByDay,
+  });
 }
 
 function registerRoutes(app, dependencies) {
   app.post("/links", (req, res) => handleCreateLink(req, res, dependencies));
+  app.get("/links/:code/stats", (req, res) => handleReadStats(req, res, dependencies));
   app.get("/links/:code", (req, res) => handleReadLink(req, res, dependencies));
   app.get("/:code", (req, res) => handleRedirect(req, res, dependencies));
 }
@@ -96,6 +116,7 @@ export function createApp(options = {}) {
   const database = openDatabase(resolveDatabasePath(options));
   const dependencies = {
     linkRepository: createLinkRepository(database),
+    clickRepository: createClickRepository(database),
     now: options.now ?? (() => Date.now()),
   };
   const app = express();

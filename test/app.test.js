@@ -72,11 +72,11 @@ test("records applied migration versions once in schema_migrations", async () =>
   const temporaryDatabase = createTemporaryDatabasePath();
   try {
     const firstApp = createApp({ databasePath: temporaryDatabase.databasePath });
-    assert.deepEqual(readAppliedMigrationVersions(temporaryDatabase.databasePath), [1]);
+    assert.deepEqual(readAppliedMigrationVersions(temporaryDatabase.databasePath), [1, 2]);
     firstApp.locals.close();
 
     const reopenedApp = createApp({ databasePath: temporaryDatabase.databasePath });
-    assert.deepEqual(readAppliedMigrationVersions(temporaryDatabase.databasePath), [1]);
+    assert.deepEqual(readAppliedMigrationVersions(temporaryDatabase.databasePath), [1, 2]);
     reopenedApp.locals.close();
   } finally {
     temporaryDatabase.remove();
