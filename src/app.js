@@ -2,6 +2,7 @@ import express from "express";
 import { randomBytes } from "node:crypto";
 import { openDatabase } from "./database.js";
 import { createLinkRepository } from "./link-repository.js";
+import { isValidAbsoluteHttpUrl, isValidCustomCode } from "./validation.js";
 
 const CODE_LENGTH = 6;
 const CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -14,6 +15,8 @@ const HTTP_CONFLICT = 409;
 const HTTP_FOUND = 302;
 const NOT_FOUND_ERROR = "link not found";
 const MISSING_URL_ERROR = "url is required";
+const INVALID_URL_ERROR = "url must be an absolute http or https URL";
+const INVALID_CODE_ERROR = "code must match ^[A-Za-z0-9_-]{3,32}$";
 const CONFLICTING_CODE_ERROR = "code already exists";
 
 function generateCode() {
@@ -29,16 +32,27 @@ function createUniqueCode(repository) {
   throw new Error("could not generate a unique short code");
 }
 
+function hasRequestedCode(req) {
+  return req.body?.code !== undefined && req.body?.code !== null;
+}
+
+function validateUrl(url) {
+  if (typeof url !== "string" || url.length === 0) return MISSING_URL_ERROR;
+  return isValidAbsoluteHttpUrl(url) ? null : INVALID_URL_ERROR;
+}
+
+function validateCode(req) {
+  return hasRequestedCode(req) && !isValidCustomCode(req.body.code) ? INVALID_CODE_ERROR : null;
+}
+
 function resolveRequestedCode(req, repository) {
-  const requestedCode = req.body?.code;
-  return typeof requestedCode === "string" ? requestedCode : createUniqueCode(repository);
+  return hasRequestedCode(req) ? req.body.code : createUniqueCode(repository);
 }
 
 function handleCreateLink(req, res, { linkRepository, now }) {
   const url = req.body?.url;
-  if (typeof url !== "string" || url.length === 0) {
-    return res.status(HTTP_BAD_REQUEST).json({ error: MISSING_URL_ERROR });
-  }
+  const validationError = validateUrl(url) ?? validateCode(req);
+  if (validationError) return res.status(HTTP_BAD_REQUEST).json({ error: validationError });
   const code = resolveRequestedCode(req, linkRepository);
   if (linkRepository.hasCode(code)) {
     return res.status(HTTP_CONFLICT).json({ error: CONFLICTING_CODE_ERROR });
