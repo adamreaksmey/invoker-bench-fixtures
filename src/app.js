@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { openDatabase } from "./database.js";
 import { createClickRepository } from "./click-repository.js";
 import { createLinkRepository } from "./link-repository.js";
+import { createFixedWindowRateLimiter } from "./rate-limiter.js";
 import { isValidAbsoluteHttpUrl, isValidCustomCode } from "./validation.js";
 
 const CODE_LENGTH = 6;
@@ -13,12 +14,17 @@ const MAX_CODE_ATTEMPTS = 10;
 const HTTP_BAD_REQUEST = 400;
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
+const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_FOUND = 302;
 const NOT_FOUND_ERROR = "link not found";
 const MISSING_URL_ERROR = "url is required";
 const INVALID_URL_ERROR = "url must be an absolute http or https URL";
 const INVALID_CODE_ERROR = "code must match ^[A-Za-z0-9_-]{3,32}$";
 const CONFLICTING_CODE_ERROR = "code already exists";
+const RATE_LIMIT_ERROR = "too many link creation requests, retry later";
+const DEFAULT_RATE_LIMIT_MAX = 20;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+const RETRY_AFTER_HEADER = "Retry-After";
 
 function generateCode() {
   const bytes = randomBytes(CODE_LENGTH);
@@ -50,7 +56,12 @@ function resolveRequestedCode(req, repository) {
   return hasRequestedCode(req) ? req.body.code : createUniqueCode(repository);
 }
 
-function handleCreateLink(req, res, { linkRepository, now }) {
+function handleCreateLink(req, res, { linkRepository, rateLimiter, now }) {
+  const rateLimit = rateLimiter.check(req.ip);
+  if (rateLimit.isLimited) {
+    res.set(RETRY_AFTER_HEADER, String(rateLimit.retryAfterSeconds));
+    return res.status(HTTP_TOO_MANY_REQUESTS).json({ error: RATE_LIMIT_ERROR });
+  }
   const url = req.body?.url;
   const validationError = validateUrl(url) ?? validateCode(req);
   if (validationError) return res.status(HTTP_BAD_REQUEST).json({ error: validationError });
@@ -112,12 +123,40 @@ function resolveDatabasePath(options) {
   return options.databasePath ?? process.env.DATABASE_PATH ?? DEFAULT_DATABASE_PATH;
 }
 
+function parseEnvironmentNumber(environmentValue, fallbackValue) {
+  const parsedValue = Number(environmentValue);
+  return Number.isFinite(parsedValue) ? parsedValue : fallbackValue;
+}
+
+function resolveRateLimitMax(options) {
+  if (options.rateLimitMax !== undefined) return options.rateLimitMax;
+  return parseEnvironmentNumber(process.env.RATE_LIMIT_MAX, DEFAULT_RATE_LIMIT_MAX);
+}
+
+function resolveRateLimitWindowMs(options) {
+  if (options.rateLimitWindowMs !== undefined) return options.rateLimitWindowMs;
+  return parseEnvironmentNumber(
+    process.env.RATE_LIMIT_WINDOW_MS,
+    DEFAULT_RATE_LIMIT_WINDOW_MS,
+  );
+}
+
+function resolveNow(options) {
+  return options.now ?? (() => Date.now());
+}
+
 export function createApp(options = {}) {
   const database = openDatabase(resolveDatabasePath(options));
+  const now = resolveNow(options);
   const dependencies = {
     linkRepository: createLinkRepository(database),
     clickRepository: createClickRepository(database),
-    now: options.now ?? (() => Date.now()),
+    rateLimiter: createFixedWindowRateLimiter({
+      max: resolveRateLimitMax(options),
+      windowMs: resolveRateLimitWindowMs(options),
+      now,
+    }),
+    now,
   };
   const app = express();
   app.disable("x-powered-by");

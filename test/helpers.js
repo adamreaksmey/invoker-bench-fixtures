@@ -42,10 +42,10 @@ export function createTemporaryApp(options = {}) {
   };
 }
 
-export function postJson(baseUrl, path, body) {
+export function postJson(baseUrl, path, body, headers = {}) {
   return fetch(`${baseUrl}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
